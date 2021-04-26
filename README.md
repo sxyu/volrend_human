@@ -1,10 +1,9 @@
 # PlenOctree Volume Rendering with LBS
 
 This is a real-time PlenOctree volume renderer written in C++ using OpenGL,
+with LBS support.
 
 Based on: https://alexyu.net/plenoctrees
-
-![Screenshot]()
 
 ## Building
 Please install a recent version of CMake <https://cmake.org>
@@ -51,7 +50,7 @@ There is also an animation maker `volrend_anim`, which I used to make some of th
 
 ## Run
 ```sh
-./volrend <name>.npz --rig <model_from_render_dir>.npz --joints joint_names.txt
+./volrend <name>.npz --rig <model_from_render_dir>.npz --goints joint_names.txt
 ```
 See `--help` for flags.
 
@@ -85,56 +84,9 @@ pose1, pose2 ... should contain 3x4 or 4x4 c2w pose matrices,
 or multiple matrices in a 4Nx4 format.
 Add `-r` to use OpenCV camera space instead of NeRF.
 
-The following zip file contains intrinsics and pose files for each scene of NeRF-synthetic,
-<https://drive.google.com/file/d/1mI4xl9FXQDm_0TidISkKCp9eyTz40stE/view?usp=sharing>
-
 Example to render out images:
-`./volrend_headless drums/tree.npz -i data/nerf_synthetic/drums/intrinsics.txt data/nerf_synthetic/drums/pose/* -o tree_rend/drums`
+`./volrend_headless tree.npz --rig model.npz -i intrinsics.txt pose/* -o tree_rend`
 
 The PNG writing is a huge bottleneck. Example to compute the FPS:
-`./volrend_headless drums/tree.npz -i data/nerf_synthetic/drums/intrinsics.txt data/nerf_synthetic/drums/pose/*`
-
-See `./volrend_headless --help` for more options such as setting rendering options.
-
-## Precomputed PlenOctree Files
-The full resolution tree files for NeRF-synthetic reported in the paper may be found at:
-<https://drive.google.com/drive/folders/1DIYj-iu3TOHProJVHPIQTjHnmYf80_vC?usp=sharing>
-
-The uncompressed NeRF-synthetic files used for the web demo are here:
-<https://drive.google.com/drive/folders/1vGXEjb3yhbClrZH1vLdl2iKtowfinWOg?usp=sharing>
-The compression script used to turn this in to the web version is in `scripts/compress_octree.py`.
-
-More to come soon.
-
-## PyTorch Extension: svox 
-
-You can find a (mostly) compatible PlenOctree library called `svox`, which we use to build the tree;
-`pip install svox`.
-
-- Code: <https://github.com/sxyu/svox>
-- Documentation: <https://svox.readthedocs.io>
-
-More information to be added soon.
-
-## Building the Web Demo
-
-**Not supported in LBS version right now**.
-The backend of the web demo is built from the shader version of the C++ source using emscripten.
-Install emscripten per instructions here:
-https://emscripten.org/docs/getting_started/downloads.html
-
-Then use
-```sh
-mkdir embuild && cd embuild
-emcmake cmake ..
-make -j12
-```
-
-The full website should be written to `embuild/build`.
-Some CMake scripts even write the html/css/js files.
-To launch it locally for previewing, you can use the make target:
-```sh
-make serve
-```
-Which should launch a server at http://0.0.0.0:8000/
+`./volrend_headless tree.npz --rig model.npz -i intrinsics.txt pose/*`
 
