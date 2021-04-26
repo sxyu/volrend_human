@@ -4,7 +4,7 @@ This is a real-time PlenOctree volume renderer written in C++ using OpenGL,
 
 Based on: https://alexyu.net/plenoctrees
 
-![Screenshot](https://raw.githubusercontent.com/sxyu/volrend/master/img/screenshot_slice.jpg)
+![Screenshot]()
 
 ## Building
 Please install a recent version of CMake <https://cmake.org>
@@ -51,7 +51,7 @@ There is also an animation maker `volrend_anim`, which I used to make some of th
 
 ## Run
 ```sh
-./volrend <name>.npz
+./volrend <name>.npz --rig <model_from_render_dir>.npz --joints joint_names.txt
 ```
 See `--help` for flags.
 
