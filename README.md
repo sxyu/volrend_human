@@ -50,7 +50,7 @@ There is also an animation maker `volrend_anim`, which I used to make some of th
 
 ## Run
 ```sh
-./volrend <name>.npz --rig <model_from_render_dir>.npz --goints joint_names.txt
+./volrend <name>.npz --rig <model_from_render_dir>.npz --joints joint_names.txt
 ```
 See `--help` for flags.
 
