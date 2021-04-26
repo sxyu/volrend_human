@@ -133,9 +133,6 @@ __global__ static void render_kernel(
         screen2worlddir(x, y, cam, dir, cen);
         float vdir[3] = {dir[0], dir[1], dir[2]};
         maybe_world2ndc(tree, dir, cen);
-        for (int i = 0; i < 3; ++i) {
-            cen[i] = tree.offset[i] + tree.scale[i] * cen[i];
-        }
 
         float t_max = 1e9f;
         if (!offscreen) {

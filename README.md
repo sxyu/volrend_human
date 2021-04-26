@@ -1,21 +1,10 @@
-# PlenOctree Volume Rendering
+# PlenOctree Volume Rendering with LBS
 
 This is a real-time PlenOctree volume renderer written in C++ using OpenGL,
-constituting part of the code release for:
 
-PlenOctrees for Real Time Rendering of Neural Radiance Fields<br>
-Alex Yu, Ruilong Li, Matthew Tancik, Hao Li, Ren Ng, Angjoo Kanazawa
-
-https://alexyu.net/plenoctrees
+Based on: https://alexyu.net/plenoctrees
 
 ![Screenshot](https://raw.githubusercontent.com/sxyu/volrend/master/img/screenshot_slice.jpg)
-
-The project has several repositories:
-
-- NeRF-SH training and PlenOctree extraction <https://github.com/sxyu/plenoctree> (To be released soon)
-- PyTorch PlenOctree rendering CUDA extension <https://github.com/sxyu/svox>
-
-More will be released soon, we are taking a short break now.
 
 ## Building
 Please install a recent version of CMake <https://cmake.org>
@@ -29,6 +18,7 @@ make -j12
 
 - If you do not have CUDA-capable GPU, pass `-DVOLREND_USE_CUDA=OFF` after `cmake ..` to use fragment shader backend, which is also used for the web demo.
   It is slower and does not support mesh-insertion and dependent features such as lumisphere probe.
+   **Only CUDA is supported in LBS version right now**
 
 The main real-time PlenOctree rendererer `volrend` and a headless version `volrend_headless` are built. The latter requires CUDA.
 There is also an animation maker `volrend_anim`, which I used to make some of the video animations; don't worry about it unless interested.
@@ -46,6 +36,7 @@ cmake --build . --config Release
 ```
 - If you do not have CUDA-capable GPU, pass `-DVOLREND_USE_CUDA=OFF` after `cmake ..` to use fragment shader backend, which is also used for the web demo.
   It is slower and does not support mesh-insertion and dependent features such as lumisphere probe.
+   **Only CUDA is supported in LBS version right now**
 
 The main real-time PlenOctree rendererer `volrend` and a headless version `volrend_headless` are built. The latter requires CUDA.
 There is also an animation maker `volrend_anim`, which I used to make some of the video animations; don't worry about it unless interested.
@@ -54,11 +45,9 @@ There is also an animation maker `volrend_anim`, which I used to make some of th
 - C++17
 - OpenGL
     - any dependencies of GLFW
-- libpng-dev (only for writing image in headless mode and saving screenshot)
-
-#### Optional
 - CUDA Toolkit, I tried on both 11.0 and 10.2
     - Pass `-DVOLREND_USE_CUDA=OFF` to disable it.
+- libpng-dev (only for writing image in headless mode and saving screenshot, optional)
 
 ## Run
 ```sh
@@ -129,6 +118,7 @@ More information to be added soon.
 
 ## Building the Web Demo
 
+**Not supported in LBS version right now**.
 The backend of the web demo is built from the shader version of the C++ source using emscripten.
 Install emscripten per instructions here:
 https://emscripten.org/docs/getting_started/downloads.html

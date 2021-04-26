@@ -1,4 +1,7 @@
 #pragma once
+
+#define N3_WARP_GRID_SIZE 256
+
 #include "volrend/camera.hpp"
 #include "volrend/cuda/common.cuh"
 #include <cuda_fp16.h>

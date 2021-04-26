@@ -149,7 +149,7 @@ int main(int argc, char *argv[]) {
     }
     std::string out_dir = args["write_images"].as<std::string>();
 
-    N3Tree tree(args["file"].as<std::string>());
+    N3Tree tree(args["file"].as<std::string>(), args["rig"].as<std::string>());
 
     int width = args["width"].as<int>(), height = args["height"].as<int>();
     float fx = args["fx"].as<float>();

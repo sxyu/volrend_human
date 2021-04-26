@@ -2,6 +2,8 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "volrend/cuda/common.cuh"
+
 #include <cstdlib>
 #include <cstdio>
 #include <string>
@@ -54,7 +56,8 @@ void glfw_update_title(GLFWwindow* window) {
     frame_count++;
 }
 
-void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
+void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
+                const std::vector<std::string>& joint_names) {
     auto& cam = rend.camera;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -79,34 +82,35 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
         open_obj_mesh_dialog.SetTitle("Load basic triangle OBJ");
     }
 #endif
-    static ImGui::FileBrowser open_tree_dialog,
-        save_screenshot_dialog(ImGuiFileBrowserFlags_EnterNewFilename);
-    if (open_tree_dialog.GetTitle().empty()) {
-        open_tree_dialog.SetTypeFilters({".npz"});
-        open_tree_dialog.SetTitle("Load N3Tree npz from svox");
-    }
+    // static ImGui::FileBrowser open_tree_dialog;
+    // if (open_tree_dialog.GetTitle().empty()) {
+    //     open_tree_dialog.SetTypeFilters({".npz"});
+    //     open_tree_dialog.SetTitle("Load N3Tree npz from svox");
+    // }
+    static ImGui::FileBrowser save_screenshot_dialog(
+        ImGuiFileBrowserFlags_EnterNewFilename);
     if (save_screenshot_dialog.GetTitle().empty()) {
         save_screenshot_dialog.SetTypeFilters({".png"});
         save_screenshot_dialog.SetTitle("Save screenshot (png)");
     }
 
-    if (ImGui::Button("Open Tree")) {
-        open_tree_dialog.Open();
-    }
-    ImGui::SameLine();
+    // if (ImGui::Button("Open Tree")) {
+    //     open_tree_dialog.Open();
+    // }
+    // ImGui::SameLine();
     if (ImGui::Button("Save Screenshot")) {
         save_screenshot_dialog.Open();
     }
 
-    open_tree_dialog.Display();
-    if (open_tree_dialog.HasSelected()) {
-        // Load octree
-        std::string path = open_tree_dialog.GetSelected().string();
-        std::cout << "Load N3Tree npz: " << path << "\n";
-        tree.open(path);
-        rend.set(tree);
-        open_tree_dialog.ClearSelected();
-    }
+    // open_tree_dialog.Display();
+    // if (open_tree_dialog.HasSelected()) {
+    //     // Load octree
+    //     std::string path = open_tree_dialog.GetSelected().string();
+    //     std::cout << "Load N3Tree npz: " << path << "\n";
+    //     tree.open(path);
+    //     rend.set(tree);
+    //     open_tree_dialog.ClearSelected();
+    // }
 
     save_screenshot_dialog.Display();
     if (save_screenshot_dialog.HasSelected()) {
@@ -186,7 +190,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
                            0.f, 1.0f);
 
     }  // End render node
-    ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+    ImGui::SetNextTreeNodeOpen(false, ImGuiCond_Once);
     if (ImGui::CollapsingHeader("Visualization")) {
         ImGui::PushItemWidth(230);
         ImGui::SliderFloat3("bb_min", rend.options.render_bbox, 0.0, 1.0);
@@ -212,24 +216,62 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree) {
     }
 
 #ifdef VOLREND_CUDA
-    ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+    if (tree.is_rigged()) {
+        ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+        if (ImGui::CollapsingHeader("Rigging")) {
+            if (ImGui::Button("reset##rig-reset")) {
+                tree.trans = glm::vec3(0);
+                std::fill(tree.pose.begin(), tree.pose.end(), glm::vec3(0));
+                tree.update_kintree();
+            }
+            if (ImGui::SliderFloat3("trans##rig", glm::value_ptr(tree.trans),
+                                    -1.f, 1.f)) {
+                tree.update_kintree();
+            }
+
+            const int STEP = 16;
+            for (int j = 0; j < tree.n_joints; j += STEP) {
+                int end_idx = std::min(j + STEP, tree.n_joints);
+                if (ImGui::TreeNode(("Axis-angle " + std::to_string(j) + " - " +
+                                     std::to_string(end_idx - 1))
+                                        .c_str())) {
+                    for (int i = j; i < end_idx; ++i) {
+                        const std::string id = std::to_string(i);
+                        std::string joint_name = joint_names.size() > i
+                                                     ? joint_names[i]
+                                                     : "joint_" + id;
+                        joint_name += "##rig_" + id;
+                        if (ImGui::SliderFloat3(joint_name.c_str(),
+                                                glm::value_ptr(tree.pose[i]),
+                                                -M_PI / 2, M_PI / 2)) {
+                            tree.update_kintree();
+                        }
+                    }  // for i
+                    ImGui::TreePop();
+                }  // TreeNode Axis-angle
+            }      // for j
+        }          // CollapsingHeader Rigging
+    }              // if tree.is_rigged
+    ImGui::SetNextTreeNodeOpen(false, ImGuiCond_Once);
     if (ImGui::CollapsingHeader("Manipulation")) {
         ImGui::BeginGroup();
         for (int i = 0; i < (int)rend.meshes.size(); ++i) {
             auto& mesh = rend.meshes[i];
-            if (ImGui::TreeNode(mesh.name.c_str())) {
-                ImGui::PushItemWidth(230);
-                ImGui::SliderFloat3("trans", glm::value_ptr(mesh.translation),
-                                    -2.0f, 2.0f);
-                ImGui::SliderFloat3("rot", glm::value_ptr(mesh.rotation), -M_PI,
-                                    M_PI);
-                ImGui::SliderFloat("scale", &mesh.scale, 0.01f, 10.0f);
-                ImGui::PopItemWidth();
-                ImGui::Checkbox("visible", &mesh.visible);
-                ImGui::SameLine();
-                ImGui::Checkbox("unlit", &mesh.unlit);
+            if (mesh.name.size() && mesh.name[0] == '_') {
+                if (ImGui::TreeNode(mesh.name.c_str())) {
+                    ImGui::PushItemWidth(230);
+                    ImGui::SliderFloat3(
+                        "trans", glm::value_ptr(mesh.translation), -2.0f, 2.0f);
+                    ImGui::SliderFloat3("rot", glm::value_ptr(mesh.rotation),
+                                        -M_PI, M_PI);
+                    ImGui::SliderFloat("scale", &mesh.scale, 0.01f, 10.0f);
+                    ImGui::PopItemWidth();
+                    ImGui::Checkbox("visible", &mesh.visible);
+                    ImGui::SameLine();
+                    ImGui::Checkbox("unlit", &mesh.unlit);
 
-                ImGui::TreePop();
+                    ImGui::TreePop();
+                }
             }
         }
         ImGui::EndGroup();
@@ -359,11 +401,10 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action,
                 if (mods & GLFW_MOD_SHIFT) speed *= 5.f;
                 if (key == GLFW_KEY_S || key == GLFW_KEY_A || key == GLFW_KEY_E)
                     speed = -speed;
-                const auto& vec = (key == GLFW_KEY_A || key == GLFW_KEY_D)
-                                      ? cam.v_right
-                                      : (key == GLFW_KEY_W || key == GLFW_KEY_S)
-                                            ? -cam.v_back
-                                            : -cam.v_up;
+                const auto& vec =
+                    (key == GLFW_KEY_A || key == GLFW_KEY_D)   ? cam.v_right
+                    : (key == GLFW_KEY_W || key == GLFW_KEY_S) ? -cam.v_back
+                                                               : -cam.v_up;
                 cam.move(vec * speed);
             } break;
 
@@ -394,10 +435,9 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action,
                     if (key == GLFW_KEY_J || key == GLFW_KEY_K ||
                         key == GLFW_KEY_U)
                         speed = -speed;
-                    int dim =
-                        (key == GLFW_KEY_J || key == GLFW_KEY_L)
-                            ? 0
-                            : (key == GLFW_KEY_I || key == GLFW_KEY_K) ? 1 : 2;
+                    int dim = (key == GLFW_KEY_J || key == GLFW_KEY_L)   ? 0
+                              : (key == GLFW_KEY_I || key == GLFW_KEY_K) ? 1
+                                                                         : 2;
                     rend.options.probe[dim] += speed;
                 }
                 break;
@@ -472,8 +512,8 @@ void glfw_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
     if (ImGui::GetIO().WantCaptureMouse) return;
     auto& cam = GET_RENDERER(window).camera;
-    // Focal length adjusting was very annoying so changed it to movement in z
-    // cam.focal *= (yoffset > 0.f) ? 1.01f : 0.99f;
+    // Focal length adjusting was very annoying so changed it to movement in
+    // z cam.focal *= (yoffset > 0.f) ? 1.01f : 0.99f;
     const float speed_fact = 1e-1f;
     cam.move(cam.v_back * ((yoffset < 0.f) ? speed_fact : -speed_fact));
 }
@@ -541,7 +581,6 @@ void glfw_window_size_callback(GLFWwindow* window, int width, int height) {
 
 int main(int argc, char* argv[]) {
     using namespace volrend;
-
     cxxopts::Options cxxoptions(
         "volrend",
         "OpenGL PlenOctree volume rendering (c) PlenOctree authors 2021");
@@ -550,13 +589,14 @@ int main(int argc, char* argv[]) {
     // clang-format off
     cxxoptions.add_options()
         ("nogui", "disable imgui", cxxopts::value<bool>())
+        ("joints", "joint names file", cxxopts::value<std::string>()->default_value(""))
         ("center", "camera center position (world); ignored for NDC",
                 cxxopts::value<std::vector<float>>()->default_value(
-                                                        "-3.5,0,3.5"))
+                                                        "-3.5,0,4.5"))
         ("back", "camera's back direction unit vector (world) for orientation; ignored for NDC",
                 cxxopts::value<std::vector<float>>()->default_value("-0.7071068,0,0.7071068"))
         ("origin", "origin for right click rotation controls; ignored for NDC",
-                cxxopts::value<std::vector<float>>()->default_value("0,0,0"))
+                cxxopts::value<std::vector<float>>()->default_value("0,0,1"))
         ("world_up", "world up direction for rotating controls e.g. "
                      "0,0,1=blender; ignored for NDC",
                 cxxopts::value<std::vector<float>>()->default_value("0,0,1"))
@@ -581,12 +621,26 @@ int main(int argc, char* argv[]) {
     bool init_loaded = false;
     if (args.count("file")) {
         init_loaded = true;
-        tree.open(args["file"].as<std::string>());
+        tree.open(args["file"].as<std::string>(),
+                  args["rig"].as<std::string>());
     }
     int width = args["width"].as<int>(), height = args["height"].as<int>();
     float fx = args["fx"].as<float>();
     float fy = args["fy"].as<float>();
     bool nogui = args["nogui"].as<bool>();
+
+    std::vector<std::string> joint_names;
+    {
+        joint_names.reserve(tree.n_joints);
+        const std::string joint_name_file = args["joints"].as<std::string>();
+        if (joint_name_file.size()) {
+            std::ifstream ifs(joint_name_file);
+            std::string joint_name;
+            while (ifs >> joint_name) {
+                joint_names.push_back(joint_name);
+            }
+        }
+    }
 
     GLFWwindow* window = glfw_init(width, height);
 
@@ -626,6 +680,17 @@ int main(int argc, char* argv[]) {
         rend.set(tree);
         rend.resize(width, height);
 
+        // std::vector<size_t> joint_mesh_ids(tree.n_joints);
+        // for (int i = 0; i < tree.n_joints; ++i) {
+        //     Mesh sphere = Mesh::Sphere();
+        //     sphere.name = "_joint_#" + std::to_string(i);
+        //     sphere.translation = tree.joint_pos_posed_[i];
+        //     sphere.scale = 0.02f;
+        //     sphere.update();
+        //     joint_mesh_ids[i] = rend.meshes.size();
+        //     rend.meshes.push_back(std::move(sphere));
+        // }
+
         // Set user pointer and callbacks
         glfwSetWindowUserPointer(window, &rend);
         glfwSetKeyCallback(window, glfw_key_callback);
@@ -642,9 +707,13 @@ int main(int argc, char* argv[]) {
             glPointSize(4.f);
             glfw_update_title(window);
 
+            // for (int i = 0; i < tree.n_joints; ++i) {
+            //     auto& sphere = rend.meshes[i];
+            //     sphere.translation = tree.joint_pos_posed_[i];
+            // }
             rend.render();
 
-            if (!nogui) draw_imgui(rend, tree);
+            if (!nogui) draw_imgui(rend, tree, joint_names);
 
             glfwSwapBuffers(window);
             glFinish();

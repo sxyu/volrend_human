@@ -111,12 +111,17 @@ uint16_t cnpy::parse_npy_header(const char* buffer, size_t& word_size,
     char fmt = header[loc1 + 1];
     // MODIFIED: fix unicode string
     if (fmt == 'U') word_size *= 4;
+    // Something's wrong, skip this one
+    if (loc2 == 0) {
+        word_size = -1;
+    }
 
     return header_len + 10;
 }
 
-void cnpy::parse_npy_header(FILE* fp, size_t& word_size,
-                            std::vector<size_t>& shape, bool& fortran_order) {
+uint16_t cnpy::parse_npy_header(FILE* fp, size_t& word_size,
+                                std::vector<size_t>& shape,
+                                bool& fortran_order) {
     char buffer[256];
     size_t res = fread(buffer, sizeof(char), 11, fp);
     if (res != 11) throw std::runtime_error("parse_npy_header: failed fread");
@@ -172,6 +177,11 @@ void cnpy::parse_npy_header(FILE* fp, size_t& word_size,
 
     // MODIFIED: fix unicode string
     if (fmt == 'U') word_size *= 4;
+    // Something's wrong, skip this one
+    if (loc2 == 0) {
+        word_size = -1;
+    }
+    return header.size() + 10;
 }
 
 void cnpy::parse_zip_footer(FILE* fp, uint16_t& nrecs,
@@ -197,31 +207,48 @@ void cnpy::parse_zip_footer(FILE* fp, uint16_t& nrecs,
     assert(comment_len == 0);
 }
 
-cnpy::NpyArray load_the_npy_file(FILE* fp) {
+cnpy::NpyArray load_the_npy_file(FILE* fp, uint64_t uncompr_bytes) {
     std::vector<size_t> shape;
     size_t word_size;
     bool fortran_order;
-    cnpy::parse_npy_header(fp, word_size, shape, fortran_order);
+    uint16_t header_len =
+        cnpy::parse_npy_header(fp, word_size, shape, fortran_order);
 
-    cnpy::NpyArray arr(shape, word_size, fortran_order);
-    size_t nread = fread(arr.data<char>(), 1, arr.num_bytes(), fp);
-    if (nread != arr.num_bytes())
-        throw std::runtime_error("load_the_npy_file: failed fread");
-    return arr;
+    if (word_size == -1) {
+        // Try to skip a unreadable file (maybe pickleed)
+        if (~uncompr_bytes) {
+            fseek(fp, uncompr_bytes - header_len - 1, SEEK_CUR);  // skip
+        }
+        return cnpy::NpyArray({}, 0, false);
+    } else {
+        cnpy::NpyArray arr(shape, word_size, fortran_order);
+        size_t nread = fread(arr.data<char>(), 1, arr.num_bytes(), fp);
+        if (nread != arr.num_bytes())
+            throw std::runtime_error("load_the_npy_file: failed fread");
+        return arr;
+    }
 }
 
-cnpy::NpyArray load_mem_npy_file(const char** ptr, const char* ptr_end) {
+cnpy::NpyArray load_mem_npy_file(const char** ptr, const char* ptr_end,
+                                 size_t uncompr_bytes) {
     std::vector<size_t> shape;
     size_t word_size;
     bool fortran_order;
-    *ptr += cnpy::parse_npy_header(*ptr, word_size, shape, fortran_order);
-
-    cnpy::NpyArray arr(shape, word_size, fortran_order);
-    if (*ptr + arr.num_bytes() >= ptr_end)
-        throw std::runtime_error("load_mem_npy_file: unexpected EOF");
-    memcpy(arr.data<char>(), *ptr, arr.num_bytes());
-    *ptr += arr.num_bytes();
-    return arr;
+    int16_t header_len =
+        cnpy::parse_npy_header(*ptr, word_size, shape, fortran_order);
+    if (word_size == -1) {
+        // Try to skip a unreadable file (maybe pickleed)
+        *ptr += uncompr_bytes;
+        return cnpy::NpyArray({}, 0, false);
+    } else {
+        *ptr += header_len;
+        cnpy::NpyArray arr(shape, word_size, fortran_order);
+        if (*ptr + arr.num_bytes() >= ptr_end)
+            throw std::runtime_error("load_mem_npy_file: unexpected EOF");
+        memcpy(arr.data<char>(), *ptr, arr.num_bytes());
+        *ptr += arr.num_bytes();
+        return arr;
+    }
 }
 
 cnpy::NpyArray load_the_npz_array(FILE* fp, uint64_t compr_bytes,
@@ -356,7 +383,7 @@ cnpy::npz_t cnpy::npz_load(const std::string& fname) {
         }
 
         if (compr_method == 0) {
-            arrays[varname] = load_the_npy_file(fp);
+            arrays[varname] = load_the_npy_file(fp, uncompr_bytes);
         } else {
             arrays[varname] =
                 load_the_npz_array(fp, compr_bytes, uncompr_bytes);
@@ -416,7 +443,7 @@ cnpy::npz_t cnpy::npz_load_mem(const char* data, uint64_t size) {
         }
 
         if (compr_method == 0) {
-            arrays[varname] = load_mem_npy_file(&ptr, ptr_end);
+            arrays[varname] = load_mem_npy_file(&ptr, ptr_end, uncompr_bytes);
         } else {
             arrays[varname] =
                 load_mem_npz_array(&ptr, ptr_end, compr_bytes, uncompr_bytes);
@@ -462,7 +489,7 @@ cnpy::NpyArray cnpy::npz_load(const std::string& fname,
         if (vname == varname) {
             NpyArray array =
                 (compr_method == 0)
-                    ? load_the_npy_file(fp)
+                    ? load_the_npy_file(fp, uncompr_bytes)
                     : load_the_npz_array(fp, compr_bytes, uncompr_bytes);
             fclose(fp);
             return array;
@@ -485,7 +512,7 @@ cnpy::NpyArray cnpy::npy_load(const std::string& fname) {
 
     if (!fp) throw std::runtime_error("npy_load: Unable to open file " + fname);
 
-    NpyArray arr = load_the_npy_file(fp);
+    NpyArray arr = load_the_npy_file(fp, -1);
 
     fclose(fp);
     return arr;

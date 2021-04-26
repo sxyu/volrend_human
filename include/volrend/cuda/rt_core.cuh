@@ -81,7 +81,12 @@ __device__ __inline__ void trace_ray(
     for (int i = 0; i < 3; ++i) {
         invdir[i] = 1.f / (dir[i] + 1e-9);
     }
-    _dda_world(cen, invdir, &tmin, &tmax, opt.render_bbox);
+    float cen_tr[3], dir_tr[3];
+    for (int i = 0; i < 3; ++i) {
+        cen_tr[i] = tree.offset[i] + tree.scale[i] * cen[i];
+        dir_tr[i] = dir[i] / tree.scale[i];
+    }
+    _dda_world(cen_tr, invdir, &tmin, &tmax, opt.render_bbox);
     tmax = min(tmax, tmax_bg);
 
     if (tmax < 0 || tmin > tmax) {
@@ -90,113 +95,121 @@ __device__ __inline__ void trace_ray(
             out[3] = 1.f;
         return;
     } else {
-        scalar_t pos[3], tmp;
+        int coords[3];
+        scalar_t pos[3], pos_orig[3], tmp;
         const half* tree_val;
-        scalar_t basis_fn[VOLREND_GLOBAL_BASIS_MAX];
-        maybe_precalc_basis(tree, vdir, basis_fn);
-        for (int i = 0; i < opt.basis_minmax[0]; ++i) {
-            basis_fn[i] = 0.f;
-        }
-        for (int i = opt.basis_minmax[1] + 1; i < VOLREND_GLOBAL_BASIS_MAX; ++i) {
-            basis_fn[i] = 0.f;
-        }
+        // scalar_t basis_fn[VOLREND_GLOBAL_BASIS_MAX];
+        // maybe_precalc_basis(tree, vdir, basis_fn);
+        // for (int i = 0; i < opt.basis_minmax[0]; ++i) {
+        //     basis_fn[i] = 0.f;
+        // }
+        // for (int i = opt.basis_minmax[1] + 1; i < VOLREND_GLOBAL_BASIS_MAX; ++i) {
+        //     basis_fn[i] = 0.f;
+        // }
 
         scalar_t light_intensity = 1.f;
         scalar_t t = tmin;
         scalar_t cube_sz;
+        const scalar_t delta_t = opt.step_size * delta_scale;
         while (t < tmax) {
             for (int j = 0; j < 3; ++j) {
-                pos[j] = cen[j] + t * dir[j];
+                pos_orig[j] = pos[j] = cen[j] + t * dir_tr[j];
+                pos[j] = min(max(tree.offset[j] + tree.scale[j] * pos[j], 0.0), 1.0 - 1e-6);
+                coords[j] = floorf(pos[j] * N3_WARP_GRID_SIZE);
+            }
+            const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE *
+                N3_WARP_GRID_SIZE +
+                coords[1] * N3_WARP_GRID_SIZE + coords[2];
+            const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_idx];
+            if (__half2float(warp_out.max_sigma) < opt.sigma_thresh) {
+                // TODO: skip rest of voxel
+                t += opt.step_size;
+                continue;
+            }
+            // {
+            //     // FIXME DEBUG
+            //     scalar_t att = expf(-delta_t * __half2float(warp_out.max_sigma));
+            //     const scalar_t weight = light_intensity * (1.f - att);
+            //     out[0] += 1.0 * weight;
+            //     out[1] += 0.2 * weight;
+            //     out[2] += 1.0 * weight;
+            //     t += opt.step_size;
+            //     light_intensity *= att;
+            //     continue;
+            // }
+
+            // TODO: trilinear
+            const half* m = warp_out.transform;
+            for (int j = 0; j < 3; ++j) {
+                pos[j] = __half2float(m[j]) * pos_orig[0] +
+                         __half2float(m[3 + j]) * pos_orig[1] +
+                         __half2float(m[6 + j]) * pos_orig[2] +
+                         __half2float(m[9 + j]);
+                pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
             }
 
             query_single_from_root(tree, pos, &tree_val, &cube_sz);
 
-            scalar_t att;
-            scalar_t subcube_tmax;
-            _dda_unit(pos, invdir, &subcube_tmax);
-            // if (opt.show_grid) {
-            //     float tmp_pos[3];
-            //     for (int j = 0; j < 3; ++j) {
-            //         tmp_pos[j] = cen[j] + t * dir[j];
-            //     }
-            //     const half* tmp_tree_val;
-            //     float tmp_cube_sz;
-            //     query_single_from_root(tree, tmp_pos, &tmp_tree_val, &tmp_cube_sz,
-            //             32);
-            //     scalar_t max3 = max(max(tmp_pos[0], tmp_pos[1]), tmp_pos[2]);
-            //     scalar_t min3 = min(min(tmp_pos[0], tmp_pos[1]), tmp_pos[2]);
-            //     scalar_t mid3 = tmp_pos[0] + tmp_pos[1] + tmp_pos[2] - min3 - max3;
-            //     const scalar_t edge_draw_thresh = 3e-2;
-            //     int n_edges = (abs(min3) < edge_draw_thresh) +
-            //                   ((1.f - abs(max3)) < edge_draw_thresh) +
-            //                   (abs(mid3) < edge_draw_thresh ||
-            //                    (1.f - abs(mid3)) < edge_draw_thresh);
+            // scalar_t subcube_tmax;
+            // _dda_unit(pos, invdir, &subcube_tmax);
             //
-            //     if (n_edges >= 2) {
-            //         const float alpha = 0.8;// exp(-1.0 * max(t - 2.0, 0.));
-            //         const float weight = light_intensity * alpha;
-            //         out[0] += 0.5 * weight; out[1] += 0.5 * weight; out[2] += 0.5 * weight;
-            //         out[3] += weight;
-            //         light_intensity *= 1 - alpha;
-            //     }
-            // }
-
-            const scalar_t t_subcube = subcube_tmax / cube_sz;
-            const scalar_t delta_t = t_subcube + opt.step_size;
-            if (__half2float(tree_val[tree.data_dim - 1]) > opt.sigma_thresh) {
-                att = expf(-delta_t * delta_scale * __half2float(tree_val[tree.data_dim - 1]));
+            // const scalar_t t_subcube = subcube_tmax / cube_sz;
+            const scalar_t sigma = min(__half2float(tree_val[tree.data_dim - 1]), 
+                                       __half2float(warp_out.max_sigma));
+            if (sigma > opt.sigma_thresh) {
+                scalar_t att = expf(-delta_t * sigma);
                 const scalar_t weight = light_intensity * (1.f - att);
 
                 if (opt.render_depth) {
                     out[0] += weight * t;
                 } else {
-                    if (tree.data_format.basis_dim >= 0) {
-                        int off = 0;
-#define MUL_BASIS_I(t) basis_fn[t] * __half2float(tree_val[off + t])
-#pragma unroll 3
-                        for (int t = 0; t < 3; ++ t) {
-                            tmp = basis_fn[0] * __half2float(tree_val[off]);
-                            switch(tree.data_format.basis_dim) {
-                                case 25:
-                                    tmp += MUL_BASIS_I(16) +
-                                        MUL_BASIS_I(17) +
-                                        MUL_BASIS_I(18) +
-                                        MUL_BASIS_I(19) +
-                                        MUL_BASIS_I(20) +
-                                        MUL_BASIS_I(21) +
-                                        MUL_BASIS_I(22) +
-                                        MUL_BASIS_I(23) +
-                                        MUL_BASIS_I(24);
-                                case 16:
-                                    tmp += MUL_BASIS_I(9) +
-                                          MUL_BASIS_I(10) +
-                                          MUL_BASIS_I(11) +
-                                          MUL_BASIS_I(12) +
-                                          MUL_BASIS_I(13) +
-                                          MUL_BASIS_I(14) +
-                                          MUL_BASIS_I(15);
-
-                                case 9:
-                                    tmp += MUL_BASIS_I(4) +
-                                        MUL_BASIS_I(5) +
-                                        MUL_BASIS_I(6) +
-                                        MUL_BASIS_I(7) +
-                                        MUL_BASIS_I(8);
-
-                                case 4:
-                                    tmp += MUL_BASIS_I(1) +
-                                        MUL_BASIS_I(2) +
-                                        MUL_BASIS_I(3);
-                            }
-                            out[t] += weight / (1.f + expf(-tmp));
-                            off += tree.data_format.basis_dim;
-                        }
-#undef MUL_BASIS_I
-                    } else {
+//                     if (tree.data_format.basis_dim >= 0) {
+//                         int off = 0;
+// #define MUL_BASIS_I(v) basis_fn[v] * __half2float(tree_val[off + v])
+// #pragma unroll 3
+//                         for (int u = 0; u < 3; ++ u) {
+//                             tmp = basis_fn[0] * __half2float(tree_val[off]);
+//                             switch(tree.data_format.basis_dim) {
+//                                 case 25:
+//                                     tmp += MUL_BASIS_I(16) +
+//                                         MUL_BASIS_I(17) +
+//                                         MUL_BASIS_I(18) +
+//                                         MUL_BASIS_I(19) +
+//                                         MUL_BASIS_I(20) +
+//                                         MUL_BASIS_I(21) +
+//                                         MUL_BASIS_I(22) +
+//                                         MUL_BASIS_I(23) +
+//                                         MUL_BASIS_I(24);
+//                                 case 16:
+//                                     tmp += MUL_BASIS_I(9) +
+//                                           MUL_BASIS_I(10) +
+//                                           MUL_BASIS_I(11) +
+//                                           MUL_BASIS_I(12) +
+//                                           MUL_BASIS_I(13) +
+//                                           MUL_BASIS_I(14) +
+//                                           MUL_BASIS_I(15);
+//
+//                                 case 9:
+//                                     tmp += MUL_BASIS_I(4) +
+//                                         MUL_BASIS_I(5) +
+//                                         MUL_BASIS_I(6) +
+//                                         MUL_BASIS_I(7) +
+//                                         MUL_BASIS_I(8);
+//
+//                                 case 4:
+//                                     tmp += MUL_BASIS_I(1) +
+//                                         MUL_BASIS_I(2) +
+//                                         MUL_BASIS_I(3);
+//                             }
+//                             out[u] += weight / (1.f + expf(-tmp));
+//                             off += tree.data_format.basis_dim;
+//                         }
+// #undef MUL_BASIS_I
+//                     } else {
                         for (int j = 0; j < 3; ++j) {
                             out[j] += __half2float(tree_val[j]) * weight;
                         }
-                    }
+                    // }
                 }
 
                 light_intensity *= att;
@@ -212,7 +225,7 @@ __device__ __inline__ void trace_ray(
                     return;
                 }
             }
-            t += delta_t;
+            t += opt.step_size;
         }
         if (opt.render_depth) {
             out[0] = out[1] = out[2] = min(out[0] * 0.3f, 1.0f);

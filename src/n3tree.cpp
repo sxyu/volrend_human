@@ -5,8 +5,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <fstream>
-#include <thread>
-#include <atomic>
 
 #include "glm/geometric.hpp"
 
@@ -100,14 +98,16 @@ std::string DataFormat::to_string() const {
 }
 
 N3Tree::N3Tree() {}
-N3Tree::N3Tree(const std::string& path) { open(path); }
+N3Tree::N3Tree(const std::string& path, const std::string& rig_path) {
+    open(path, rig_path);
+}
 N3Tree::~N3Tree() {
 #ifdef VOLREND_CUDA
     free_cuda();
 #endif
 }
 
-void N3Tree::open(const std::string& path) {
+void N3Tree::open(const std::string& path, const std::string& rig_path) {
     clear_cpu_memory();
 
     data_loaded_ = false;
@@ -115,12 +115,17 @@ void N3Tree::open(const std::string& path) {
     cuda_loaded_ = false;
 #endif
     npz_path_ = path;
-    assert(path.size() > 3 && path.substr(path.size() - 4) == ".npz");
+    if (path.size() <= 3 || path.substr(path.size() - 4) != ".npz") {
+        std::cerr << "ERROR: Please choose a NPZ file\n";
+        return;
+    }
 
     poses_bounds_path_ = path.substr(0, path.size() - 4) + "_poses_bounds.npy";
 
-    cnpy::npz_t npz = cnpy::npz_load(path);
-    load_npz(npz);
+    {
+        cnpy::npz_t npz = cnpy::npz_load(path);
+        load_npz(npz);
+    }
 
     use_ndc = bool(std::ifstream(poses_bounds_path_));
     if (use_ndc) {
@@ -140,14 +145,26 @@ void N3Tree::open(const std::string& path) {
                                              ndc_avg_back, ndc_avg_cen);
         }
     }
+
+    rig_path_ = rig_path;
+    bool use_lbs = rig_path_.size() && bool(std::ifstream(rig_path_));
+    if (use_lbs) {
+        std::cerr << "INFO: Use model.npz for rigging info: " << rig_path_
+                  << "\n";
+        cnpy::npz_t rig_npz = cnpy::npz_load(rig_path_);
+        load_rig_npz(rig_npz);
+    }
+
     last_sigma_thresh_ = -1.f;
 #ifdef VOLREND_CUDA
     load_cuda();
 #endif
+    update_kintree();
     data_loaded_ = true;
 }
 
-void N3Tree::open_mem(const char* data, uint64_t size) {
+void N3Tree::open_mem(const char* data, uint64_t size, const char* rig_data,
+                      uint64_t rig_size) {
     data_loaded_ = false;
 #ifdef VOLREND_CUDA
     cuda_loaded_ = false;
@@ -155,13 +172,22 @@ void N3Tree::open_mem(const char* data, uint64_t size) {
     clear_cpu_memory();
 
     npz_path_ = "";
-    cnpy::npz_t npz = cnpy::npz_load_mem(data, size);
-    load_npz(npz);
+    rig_path_ = "";
+    {
+        cnpy::npz_t npz = cnpy::npz_load_mem(data, size);
+        load_npz(npz);
+    }
+
+    if (rig_data) {
+        cnpy::npz_t rig_npz = cnpy::npz_load_mem(rig_data, rig_size);
+        load_rig_npz(rig_npz);
+    }
 
     last_sigma_thresh_ = -1.f;
 #ifdef VOLREND_CUDA
     load_cuda();
 #endif
+    update_kintree();
     data_loaded_ = true;
 }
 
@@ -348,7 +374,7 @@ void _gen_wireframe_impl(const N3Tree& tree, size_t nodeid, size_t xi,
             }
         }
     }
-}  // namespace
+}
 }  // namespace
 
 std::vector<float> N3Tree::gen_wireframe(int max_depth) const {

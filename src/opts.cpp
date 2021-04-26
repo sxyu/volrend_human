@@ -7,6 +7,7 @@ void add_common_opts(cxxopts::Options& options) {
     // clang-format off
     options.add_options()
         ("file", "npz file storing octree data", cxxopts::value<std::string>())
+        ("rig", "Rigging model file for LBS", cxxopts::value<std::string>()->default_value(""))
         ("gpu", "CUDA device id (only if using cuda; defaults to first one)",
              cxxopts::value<int>()->default_value("-1"))
         ("w,width", "image width", cxxopts::value<int>()->default_value("800"))
@@ -17,7 +18,7 @@ void add_common_opts(cxxopts::Options& options) {
             cxxopts::value<float>()->default_value("-1.0"))
         ("bg", "background brightness 0-1", cxxopts::value<float>()->default_value("1.0"))
         ("s,step_size", "step size epsilon added to computed cube size",
-             cxxopts::value<float>()->default_value("1e-4"))
+             cxxopts::value<float>()->default_value("1e-3"))
         ("e,stop_thresh", "early stopping threshold (on remaining intensity)",
              cxxopts::value<float>()->default_value("1e-2"))
         ("a,sigma_thresh", "sigma threshold (skip cells with < sigma)",

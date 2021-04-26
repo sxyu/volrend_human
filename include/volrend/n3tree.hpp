@@ -21,16 +21,37 @@ using half_float::half;
 
 namespace volrend {
 
+struct _BBoxItem {
+    _BBoxItem(float x, float y, float z, float size)
+        : xyz{x, y, z}, size(size) {}
+    float xyz[3];
+    float size;
+};
+
+struct _LBSWeightItem {
+    uint16_t index;
+    __half weight;
+};
+
+struct _WarpGridItem {
+    __half transform[12];
+    __half max_sigma;
+};
+
 // Read-only N3Tree loader
 struct N3Tree {
     N3Tree();
-    explicit N3Tree(const std::string& path);
+    explicit N3Tree(const std::string& path, const std::string& rig_path = "");
     ~N3Tree();
 
     // Open npz
-    void open(const std::string& path);
+    void open(const std::string& path, const std::string& rig_path = "");
     // Open memory data stream (for web mostly)
-    void open_mem(const char* data, uint64_t size);
+    void open_mem(const char* data, uint64_t size,
+                  const char* rig_data = nullptr, uint64_t rig_size = 0);
+
+    // KinTree propagation
+    void update_kintree();
 
     // Generate wireframe (returns line vertex positions; 9 * (a-b c-d) ..)
     // assignable to Mesh.vert
@@ -46,10 +67,25 @@ struct N3Tree {
     // Capacity
     int capacity = 0;
 
+    // ** LBS/Skeleton
+    // Number of joints
+    int n_joints;
+    // Number of vertices
+    int n_verts;
+    // **
+
     // Scaling for coordinates
     std::array<float, 3> scale;
     // Translation
     std::array<float, 3> offset;
+
+    // Axis-angle pose at each joint, set by user (only used if rigged)
+    std::vector<glm::vec3> pose;
+    // Root translation
+    glm::vec3 trans;
+
+    // True if rigged
+    bool is_rigged();
 
     bool is_data_loaded();
 #ifdef VOLREND_CUDA
@@ -68,6 +104,7 @@ struct N3Tree {
     float ndc_width, ndc_height, ndc_focal;
     glm::vec3 ndc_avg_up, ndc_avg_back, ndc_avg_cen;
 
+    // ***** Internal ******
 #ifdef VOLREND_CUDA
     // CUDA memory
     mutable struct {
@@ -76,10 +113,23 @@ struct N3Tree {
         float* offset = nullptr;
         float* scale = nullptr;
         float* extra = nullptr;
+
+        // BBOX and scale at each leaf
+        _BBoxItem* bbox = nullptr;
+        uint64_t* inv_ptr = nullptr;
+
+        // Per-leaf LBS weight from NN
+        uint32_t* lbs_weight_start = nullptr;
+        _LBSWeightItem* lbs_weight = nullptr;
+        // Computed warp grid
+        _WarpGridItem* warp = nullptr;
+        // Joint transform
+        float* joint_transform = nullptr;
     } device;
 #endif
+
     // Main data holder
-    cnpy::NpyArray data_;
+    mutable cnpy::NpyArray data_;
 
     // Child link data holder
     cnpy::NpyArray child_;
@@ -87,14 +137,42 @@ struct N3Tree {
     // Optional extra data
     cnpy::NpyArray extra_;
 
-   private:
-    void load_npz(cnpy::npz_t& npz);
+    // ** LBS / Skeleton
+    // LBS weight data holder (SMPL weights)
+    cnpy::NpyArray weights_;
 
-    // Paths
-    std::string npz_path_, data_path_, poses_bounds_path_;
-    bool data_loaded_;
+    // Joints positions at rest (SMPL J)
+    std::vector<glm::vec3> joint_pos_;
+
+    // Vertex positions (SMPL v_template)
+    cnpy::NpyArray v_template_;
+
+    // Kinectic tree parents (SMPL kintree_table; only nonempty if rigged)
+    std::vector<uint32_t> kintree_table_;
+
+    // **
+
+    // Bounding box center and size for leaf voxel at given compressed leaf
+    // index (Lx4 : cen_x cen_y cen_z scale)
+    std::vector<_BBoxItem> bbox_;
+    // Pointer to data (/data_dim) for given compressed leaf index (L)
+    std::vector<uint64_t> inv_ptr_;
+
+    std::vector<uint32_t> lbs_weight_start_;
+    std::vector<_LBSWeightItem> lbs_weight_;
+    std::vector<glm::vec3> joint_pos_posed_;
+    mutable std::vector<float> joint_transform_;
 
     int N2_, N3_;
+
+   private:
+    void load_npz(cnpy::npz_t& npz);
+    void load_rig_npz(cnpy::npz_t& npz);
+    void gen_bbox();
+
+    // Paths
+    std::string npz_path_, rig_path_, poses_bounds_path_;
+    bool data_loaded_;
 
     mutable float last_sigma_thresh_;
 
@@ -102,6 +180,7 @@ struct N3Tree {
     bool cuda_loaded_;
     void load_cuda();
     void free_cuda();
+    void update_kintree_cuda();
 #endif
 };
 
