@@ -50,14 +50,14 @@ There is also an animation maker `volrend_anim`, which I used to make some of th
 
 ## Run
 ```sh
-./volrend <name>.npz --rig <model_from_render_dir>.npz --joints joint_names.txt
+./volrend <tree>.npz --rig <model>.npz --joints joint_names.txt
 ```
 See `--help` for flags.
+Please find some example files here (tree: `rp_manuel_cube_0.npz`, model: `rp_manuel_model.npz`): https://drive.google.com/drive/folders/1Sh0AP3kYtTUnnncY61sRwzDWJt087crV?usp=sharing
 
-There is an ImGui window which exposes rendering options as well as interactive features mentioned in the paper + video.
-For the mesh insertion, only very simple OBJ files (with triangles only) optionally with vertex coloring are supported. 
-Some example meshes are in `sample_obj`, and a program to generate SH meshes (just for fun) is in `sample_obj/sh/gen_sh.cpp`.
-Please use meshlab to triangulate other mesh.
+
+There is an ImGui window which exposes rendering options as well as interactive features, including rotation controls for each joint.
+*Currently, transformed geometry only appear if they are within the initial bounding box. This should not be hard to fix.*
 
 ### Keyboard + Mouse Controls
 - Left mouse btn + drag: rotate about camera position
