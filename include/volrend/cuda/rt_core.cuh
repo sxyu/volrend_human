@@ -117,35 +117,40 @@ __device__ __inline__ void trace_ray(
                 pos[j] = min(max(tree.offset[j] + tree.scale[j] * pos[j], 0.0), 1.0 - 1e-6);
                 coords[j] = floorf(pos[j] * N3_WARP_GRID_SIZE);
             }
-            const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE *
-                N3_WARP_GRID_SIZE +
-                coords[1] * N3_WARP_GRID_SIZE + coords[2];
-            const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_idx];
-            if (__half2float(warp_out.max_sigma) < opt.sigma_thresh) {
-                // TODO: skip rest of voxel
-                t += opt.step_size;
-                continue;
-            }
-            // {
-            //     // FIXME DEBUG
-            //     scalar_t att = expf(-delta_t * __half2float(warp_out.max_sigma));
-            //     const scalar_t weight = light_intensity * (1.f - att);
-            //     out[0] += 1.0 * weight;
-            //     out[1] += 0.2 * weight;
-            //     out[2] += 1.0 * weight;
-            //     t += opt.step_size;
-            //     light_intensity *= att;
-            //     continue;
-            // }
 
-            // TODO: trilinear
-            const half* m = warp_out.transform;
-            for (int j = 0; j < 3; ++j) {
-                pos[j] = __half2float(m[j]) * pos_orig[0] +
-                         __half2float(m[3 + j]) * pos_orig[1] +
-                         __half2float(m[6 + j]) * pos_orig[2] +
-                         __half2float(m[9 + j]);
-                pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
+            scalar_t sigma = 1e9;
+            if (tree.n_joints > 0) {
+                const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE *
+                    N3_WARP_GRID_SIZE +
+                    coords[1] * N3_WARP_GRID_SIZE + coords[2];
+                const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_idx];
+                if (__half2float(warp_out.max_sigma) < opt.sigma_thresh) {
+                    // TODO: skip rest of voxel
+                    t += opt.step_size;
+                    continue;
+                }
+                // {
+                //     // FIXME DEBUG
+                //     scalar_t att = expf(-delta_t * __half2float(warp_out.max_sigma));
+                //     const scalar_t weight = light_intensity * (1.f - att);
+                //     out[0] += 1.0 * weight;
+                //     out[1] += 0.2 * weight;
+                //     out[2] += 1.0 * weight;
+                //     t += opt.step_size;
+                //     light_intensity *= att;
+                //     continue;
+                // }
+
+                // TODO: trilinear
+                const half* m = warp_out.transform;
+                for (int j = 0; j < 3; ++j) {
+                    pos[j] = __half2float(m[j]) * pos_orig[0] +
+                        __half2float(m[3 + j]) * pos_orig[1] +
+                        __half2float(m[6 + j]) * pos_orig[2] +
+                        __half2float(m[9 + j]);
+                    pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
+                }
+                sigma = __half2float(warp_out.max_sigma);
             }
 
             query_single_from_root(tree, pos, &tree_val, &cube_sz);
@@ -154,8 +159,7 @@ __device__ __inline__ void trace_ray(
             // _dda_unit(pos, invdir, &subcube_tmax);
             //
             // const scalar_t t_subcube = subcube_tmax / cube_sz;
-            const scalar_t sigma = min(__half2float(tree_val[tree.data_dim - 1]), 
-                                       __half2float(warp_out.max_sigma));
+            sigma = min(sigma, __half2float(tree_val[tree.data_dim - 1]));
             if (sigma > opt.sigma_thresh) {
                 scalar_t att = expf(-delta_t * sigma);
                 const scalar_t weight = light_intensity * (1.f - att);

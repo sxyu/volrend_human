@@ -153,6 +153,8 @@ void N3Tree::open(const std::string& path, const std::string& rig_path) {
                   << "\n";
         cnpy::npz_t rig_npz = cnpy::npz_load(rig_path_);
         load_rig_npz(rig_npz);
+    } else {
+        n_joints = 0;
     }
 
     last_sigma_thresh_ = -1.f;

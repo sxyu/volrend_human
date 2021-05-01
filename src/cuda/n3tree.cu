@@ -208,7 +208,7 @@ void N3Tree::update_kintree_cuda() {
     const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
     device::lbs_transform_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
     // For debugging / verification
-    // device::debug_lbs_draw_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    device::debug_lbs_draw_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
 }
 
 void N3Tree::free_cuda() {
