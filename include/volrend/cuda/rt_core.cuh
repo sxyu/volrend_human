@@ -25,26 +25,26 @@ __device__ __inline__ void _dda_world(
     *tmax = 1e4;
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
-        t1 = (render_bbox[i] - cen[i]) * _invdir[i];
-        t2 = (render_bbox[i + 3] - cen[i]) * _invdir[i];
+        t1 = (render_bbox[i] + 1e-6 - cen[i]) * _invdir[i];
+        t2 = (render_bbox[i + 3] - 1e-6 - cen[i]) * _invdir[i];
         *tmin = max(*tmin, min(t1, t2));
         *tmax = min(*tmax, max(t1, t2));
     }
 }
 
 template<typename scalar_t>
-__device__ __inline__ void _dda_unit(
+__device__ __inline__ scalar_t _dda_unit(
         const scalar_t* __restrict__ cen,
-        const scalar_t* __restrict__ _invdir,
-        scalar_t* __restrict__ tmax) {
+        const scalar_t* __restrict__ _invdir) {
     scalar_t t1, t2;
-    *tmax = 1e4;
+    scalar_t tmax = 1e4;
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
         t1 = - cen[i] * _invdir[i];
         t2 = t1 +  _invdir[i];
-        *tmax = min(*tmax, max(t1, t2));
+        tmax = min(tmax, max(t1, t2));
     }
+    return tmax;
 }
 
 template <typename scalar_t>
@@ -112,37 +112,33 @@ __device__ __inline__ void trace_ray(
         scalar_t cube_sz;
         const scalar_t delta_t = opt.step_size * delta_scale;
         while (t < tmax) {
-            for (int j = 0; j < 3; ++j) {
-                pos_orig[j] = pos[j] = cen[j] + t * dir_tr[j];
-                pos[j] = min(max(tree.offset[j] + tree.scale[j] * pos[j], 0.0), 1.0 - 1e-6);
-                coords[j] = floorf(pos[j] * N3_WARP_GRID_SIZE);
-            }
+            // for (int j = 0; j < 3; ++j) {
+            //     pos_orig[j] = pos[j] = cen[j] + t * dir_tr[j];
+            //     pos[j] = cen_tr[j] + t * dir[j];
+            //     coords[j] = floorf(pos[j] * N3_WARP_GRID_SIZE);
+            // }
+            pos[0] = cen_tr[0] + t * dir[0];
+            pos[1] = cen_tr[1] + t * dir[1];
+            pos[2] = cen_tr[2] + t * dir[2];
 
             scalar_t sigma = 1e9;
             if (tree.n_joints > 0) {
+                for (int j = 0; j < 3; ++j)  {
+                    pos_orig[j] = cen[j] + t * dir_tr[j];
+                    pos[j] *= N3_WARP_GRID_SIZE;
+                    coords[j] = floorf(pos[j]);
+                }
                 const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE *
                     N3_WARP_GRID_SIZE +
                     coords[1] * N3_WARP_GRID_SIZE + coords[2];
-                const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_idx];
-                if (__half2float(warp_out.max_sigma) < opt.sigma_thresh) {
-                    // TODO: skip rest of voxel
+                const _WarpGridItem& __restrict__ warp = tree.warp[warp_idx];
+                if (__half2float(warp.max_sigma) < opt.sigma_thresh) {
                     t += opt.step_size;
                     continue;
                 }
-                // {
-                //     // FIXME DEBUG
-                //     scalar_t att = expf(-delta_t * __half2float(warp_out.max_sigma));
-                //     const scalar_t weight = light_intensity * (1.f - att);
-                //     out[0] += 1.0 * weight;
-                //     out[1] += 0.2 * weight;
-                //     out[2] += 1.0 * weight;
-                //     t += opt.step_size;
-                //     light_intensity *= att;
-                //     continue;
-                // }
 
                 // TODO: trilinear
-                const half* m = warp_out.transform;
+                const half* m = warp.transform;
                 for (int j = 0; j < 3; ++j) {
                     pos[j] = __half2float(m[j]) * pos_orig[0] +
                         __half2float(m[3 + j]) * pos_orig[1] +
@@ -150,15 +146,12 @@ __device__ __inline__ void trace_ray(
                         __half2float(m[9 + j]);
                     pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
                 }
-                sigma = __half2float(warp_out.max_sigma);
+                sigma = __half2float(warp.max_sigma);
             }
 
             query_single_from_root(tree, pos, &tree_val, &cube_sz);
 
-            // scalar_t subcube_tmax;
-            // _dda_unit(pos, invdir, &subcube_tmax);
-            //
-            // const scalar_t t_subcube = subcube_tmax / cube_sz;
+            // const scalar_t t_subcube = _dda_unit(pos, invdir) / cube_sz;
             sigma = min(sigma, __half2float(tree_val[tree.data_dim - 1]));
             if (sigma > opt.sigma_thresh) {
                 scalar_t att = expf(-delta_t * sigma);
@@ -210,9 +203,9 @@ __device__ __inline__ void trace_ray(
 //                         }
 // #undef MUL_BASIS_I
 //                     } else {
-                        for (int j = 0; j < 3; ++j) {
-                            out[j] += __half2float(tree_val[j]) * weight;
-                        }
+                        out[0] += __half2float(tree_val[0]) * weight;
+                        out[1] += __half2float(tree_val[1]) * weight;
+                        out[2] += __half2float(tree_val[2]) * weight;
                     // }
                 }
 
