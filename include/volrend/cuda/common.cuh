@@ -2,6 +2,7 @@
 #include "volrend/common.hpp"
 #include <cstdio>
 #include <cmath>
+#include <cstdint>
 
 #ifdef VOLREND_CUDA
 
@@ -33,8 +34,8 @@ __host__ __device__ __inline__ static scalar_t _dist2(
 template<typename scalar_t>
 __host__ __device__ __inline__ static void _normalize(
         scalar_t* __restrict__ dir) {
-    scalar_t norm = _norm(dir);
-    dir[0] /= norm; dir[1] /= norm; dir[2] /= norm;
+    scalar_t invnorm = 1.f / _norm(dir);
+    dir[0] *= invnorm; dir[1] *= invnorm; dir[2] *= invnorm;
 }
 
 template<typename scalar_t>
@@ -128,20 +129,36 @@ __device__ __inline__ void transform_coord(scalar_t* __restrict__ q,
     }
 }
 
-__device__ __inline__ unsigned int expand_bits(unsigned int v) {
-    v = (v * 0x00010001u) & 0xFF0000FFu;
-    v = (v * 0x00000101u) & 0x0F00F00Fu;
-    v = (v * 0x00000011u) & 0xC30C30C3u;
-    v = (v * 0x00000005u) & 0x49249249u;
+__host__ __device__ __inline__ uint32_t _expand_bits(uint32_t v) {
+    v = (v | (v << 16)) & 0x030000FF;
+    v = (v | (v <<  8)) & 0x0300F00F;
+    v = (v | (v <<  4)) & 0x030C30C3;
+    v = (v | (v <<  2)) & 0x09249249;
+    return v;
+}
+
+__host__ __device__ __inline__ uint32_t _unexpand_bits(uint32_t v) {
+    v &= 0x49249249;
+    v = (v | (v >> 2)) & 0xc30c30c3;
+    v = (v | (v >> 4)) & 0xf00f00f;
+    v = (v | (v >> 8)) & 0xff0000ff;
+    v = (v | (v >> 16)) & 0x0000ffff;
     return v;
 }
 
 // 3D Morton code
-__device__ __inline__ unsigned int morton_code_3(unsigned int x, unsigned y, unsigned z) {
-    unsigned int xx = expand_bits(x);
-    unsigned int yy = expand_bits(y);
-    unsigned int zz = expand_bits(z);
-    return xx * 4 + yy * 2 + zz;
+__host__ __device__ __inline__ uint32_t morton_code_3(uint32_t x, uint32_t y, uint32_t z) {
+    uint32_t xx = _expand_bits(x);
+    uint32_t yy = _expand_bits(y);
+    uint32_t zz = _expand_bits(z);
+    return (xx << 2) + (yy << 1) + zz;
+}
+
+__host__ __device__ __inline__ void inv_morton_code_3(uint32_t code,
+        uint32_t* x, uint32_t* y, uint32_t* z) {
+    *x = _unexpand_bits(code >> 2);
+    *y = _unexpand_bits(code >> 1);
+    *z = _unexpand_bits(code);
 }
 
 namespace volrend {

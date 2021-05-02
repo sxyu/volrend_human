@@ -114,9 +114,8 @@ __global__ static void debug_lbs_draw_kernel(TreeSpec tree) {
     //     // Out of bounds
     //     return;
     // }
-    // const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE +
-    //     coords[1] * N3_WARP_GRID_SIZE + coords[2];
-    // const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_idx];
+    // const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
+    // const _WarpGridItem& __restrict__ warp_out = tree.warp[warp_id];
     // float msigma = __half2float(warp_out.max_sigma);
     // data_ptr[3] = warp_out.max_sigma;
 
@@ -221,7 +220,7 @@ void N3Tree::update_kintree_cuda() {
     if (device.warp == nullptr) {
         cuda(Malloc((void**)&device.warp, warp_size));
     }
-    const size_t warp_dist_map_size = 2 * N3_WARP_GRID_SIZE *
+    const size_t warp_dist_map_size = 1.2 * N3_WARP_GRID_SIZE *
         N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
     if (device.warp_dist_map == nullptr) {
         cuda(Malloc((void**)&device.warp_dist_map, warp_dist_map_size));
@@ -245,7 +244,8 @@ void N3Tree::update_kintree_cuda() {
     }
 
     {
-        const int blocks = N_BLOCKS_NEEDED(warp_dist_map_size / 2, N_CUDA_THREADS);
+        const int blocks = N_BLOCKS_NEEDED(N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE *
+                                           N3_WARP_GRID_SIZE, N_CUDA_THREADS);
         device::warp_dist_prop_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
     }
     // For debugging / verification

@@ -77,16 +77,16 @@ __device__ __inline__ void trace_ray(
 
     scalar_t tmin, tmax;
     scalar_t invdir[3];
-#pragma unroll
+#pragma unroll 3
     for (int i = 0; i < 3; ++i) {
         invdir[i] = 1.f / (dir[i] + 1e-9);
     }
-    float cen_tr[3], dir_tr[3];
+    float cen_local[3], dir_world[3];
     for (int i = 0; i < 3; ++i) {
-        cen_tr[i] = tree.offset[i] + tree.scale[i] * cen[i];
-        dir_tr[i] = dir[i] / tree.scale[i];
+        cen_local[i] = tree.offset[i] + tree.scale[i] * cen[i];
+        dir_world[i] = dir[i] / tree.scale[i];
     }
-    _dda_world(cen_tr, invdir, &tmin, &tmax, opt.render_bbox);
+    _dda_world(cen_local, invdir, &tmin, &tmax, opt.render_bbox);
     tmax = min(tmax, tmax_bg);
 
     if (tmax < 0 || tmin > tmax) {
@@ -95,8 +95,9 @@ __device__ __inline__ void trace_ray(
             out[3] = 1.f;
         return;
     } else {
-        int coords[3];
-        scalar_t pos[3], pos_orig[3];//, tmp;
+        uint32_t coords[3];
+        uint32_t ul[3];
+        scalar_t pos[3], pos_world[3];//, tmp;
         const half* tree_val;
         // scalar_t basis_fn[VOLREND_GLOBAL_BASIS_MAX];
         // maybe_precalc_basis(tree, vdir, basis_fn);
@@ -112,15 +113,15 @@ __device__ __inline__ void trace_ray(
         scalar_t cube_sz;
         const scalar_t delta_t = opt.step_size * delta_scale;
         while (t < tmax) {
-            pos[0] = cen_tr[0] + t * dir[0];
-            pos[1] = cen_tr[1] + t * dir[1];
-            pos[2] = cen_tr[2] + t * dir[2];
+            pos[0] = cen_local[0] + t * dir[0];
+            pos[1] = cen_local[1] + t * dir[1];
+            pos[2] = cen_local[2] + t * dir[2];
 
             scalar_t sigma = 1e9;
             if (tree.n_joints > 0) {
 #pragma unroll 3
                 for (int j = 0; j < 3; ++j)  {
-                    pos_orig[j] = cen[j] + t * dir_tr[j];
+                    pos_world[j] = cen[j] + t * dir_world[j];
                     pos[j] *= N3_WARP_GRID_SIZE;
                     coords[j] = floorf(pos[j]);
                 }
@@ -128,7 +129,24 @@ __device__ __inline__ void trace_ray(
                 const uint8_t warp_dist = tree.warp_dist_map[warp_id];
                 if (warp_dist > 0) {
                     // FIXME correct this step step to use dda_unit
-                    t += opt.step_size * (1 << ((int)warp_dist - 1));
+                    const uint32_t cell_scale = (1 << (uint32_t)(warp_dist - 1));
+                    const float inv_cell_scale = 1.f / cell_scale;
+                    const uint32_t cell_ul_shift = 3 * (warp_dist - 1);
+
+                    inv_morton_code_3((warp_id >> cell_ul_shift) << cell_ul_shift,
+                        ul, ul + 1, ul + 2);
+#pragma unroll 3
+                    for (int j = 0; j < 3; ++j)  {
+                        pos[j] = (pos[j] - ul[j]) * inv_cell_scale;
+                    }
+                    // if (pos[0] < 0 || pos[1] < 0 || pos[2] < 0 ||
+                    //     pos[0] >= 1 || pos[1] >= 1 || pos[2] >= 1) {
+                    //     printf("%f %f %f\n", pos[0], pos[1], pos[2]);
+                    // }
+
+                    const scalar_t t_subcube = _dda_unit(pos, invdir);
+                    const scalar_t delta_t = t_subcube * (float(cell_scale) / N3_WARP_GRID_SIZE);
+                    t += delta_t + opt.step_size;
                     continue;
                 }
                 const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
@@ -136,9 +154,9 @@ __device__ __inline__ void trace_ray(
                 // TODO: trilinear
                 const half* m = warp.transform;
                 for (int j = 0; j < 3; ++j) {
-                    pos[j] = __half2float(m[j]) * pos_orig[0] +
-                        __half2float(m[3 + j]) * pos_orig[1] +
-                        __half2float(m[6 + j]) * pos_orig[2] +
+                    pos[j] = __half2float(m[j]) * pos_world[0] +
+                        __half2float(m[3 + j]) * pos_world[1] +
+                        __half2float(m[6 + j]) * pos_world[2] +
                         __half2float(m[9 + j]);
                     pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
                 }
