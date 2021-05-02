@@ -96,7 +96,7 @@ __device__ __inline__ void trace_ray(
         return;
     } else {
         int coords[3];
-        scalar_t pos[3], pos_orig[3], tmp;
+        scalar_t pos[3], pos_orig[3];//, tmp;
         const half* tree_val;
         // scalar_t basis_fn[VOLREND_GLOBAL_BASIS_MAX];
         // maybe_precalc_basis(tree, vdir, basis_fn);
@@ -112,30 +112,26 @@ __device__ __inline__ void trace_ray(
         scalar_t cube_sz;
         const scalar_t delta_t = opt.step_size * delta_scale;
         while (t < tmax) {
-            // for (int j = 0; j < 3; ++j) {
-            //     pos_orig[j] = pos[j] = cen[j] + t * dir_tr[j];
-            //     pos[j] = cen_tr[j] + t * dir[j];
-            //     coords[j] = floorf(pos[j] * N3_WARP_GRID_SIZE);
-            // }
             pos[0] = cen_tr[0] + t * dir[0];
             pos[1] = cen_tr[1] + t * dir[1];
             pos[2] = cen_tr[2] + t * dir[2];
 
             scalar_t sigma = 1e9;
             if (tree.n_joints > 0) {
+#pragma unroll 3
                 for (int j = 0; j < 3; ++j)  {
                     pos_orig[j] = cen[j] + t * dir_tr[j];
                     pos[j] *= N3_WARP_GRID_SIZE;
                     coords[j] = floorf(pos[j]);
                 }
-                const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE *
-                    N3_WARP_GRID_SIZE +
-                    coords[1] * N3_WARP_GRID_SIZE + coords[2];
-                const _WarpGridItem& __restrict__ warp = tree.warp[warp_idx];
-                if (__half2float(warp.max_sigma) < opt.sigma_thresh) {
-                    t += opt.step_size;
+                const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
+                const uint8_t warp_dist = tree.warp_dist_map[warp_id];
+                if (warp_dist > 0) {
+                    // FIXME correct this step step to use dda_unit
+                    t += opt.step_size * (1 << ((int)warp_dist - 1));
                     continue;
                 }
+                const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
 
                 // TODO: trilinear
                 const half* m = warp.transform;

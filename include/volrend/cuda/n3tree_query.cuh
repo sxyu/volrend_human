@@ -1,6 +1,7 @@
 #pragma once
 
-#define N3_WARP_GRID_SIZE 256
+#define N3_WARP_GRID_DEPTH 8
+#define N3_WARP_GRID_SIZE (1 << N3_WARP_GRID_DEPTH)
 
 #include "volrend/camera.hpp"
 #include "volrend/cuda/common.cuh"

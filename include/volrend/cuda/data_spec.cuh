@@ -33,6 +33,7 @@ struct TreeSpec {
     const uint32_t* VOLREND_RESTRICT const lbs_weight_start;
     const _LBSWeightItem* VOLREND_RESTRICT const lbs_weight;
     _WarpGridItem* VOLREND_RESTRICT const warp;
+    uint8_t* VOLREND_RESTRICT const warp_dist_map;
     const float* VOLREND_RESTRICT const joint_transform;
     const int N;
     const int capacity;
@@ -56,6 +57,7 @@ struct TreeSpec {
         lbs_weight_start(cpu ? tree.lbs_weight_start_.data() : tree.device.lbs_weight_start),
         lbs_weight(cpu ? tree.lbs_weight_.data() : tree.device.lbs_weight),
         warp(cpu ? nullptr : tree.device.warp),
+        warp_dist_map(cpu ? nullptr : tree.device.warp_dist_map),
         joint_transform(cpu ? tree.joint_transform_.data() : tree.device.joint_transform),
         N(tree.N),
         capacity(tree.capacity),

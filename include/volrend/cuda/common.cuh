@@ -128,6 +128,22 @@ __device__ __inline__ void transform_coord(scalar_t* __restrict__ q,
     }
 }
 
+__device__ __inline__ unsigned int expand_bits(unsigned int v) {
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+// 3D Morton code
+__device__ __inline__ unsigned int morton_code_3(unsigned int x, unsigned y, unsigned z) {
+    unsigned int xx = expand_bits(x);
+    unsigned int yy = expand_bits(y);
+    unsigned int zz = expand_bits(z);
+    return xx * 4 + yy * 2 + zz;
+}
+
 namespace volrend {
 
 // Beware that NVCC doesn't work with C files and __VA_ARGS__

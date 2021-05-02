@@ -123,6 +123,7 @@ struct N3Tree {
         _LBSWeightItem* lbs_weight = nullptr;
         // Computed warp grid
         _WarpGridItem* warp = nullptr;
+        uint8_t* warp_dist_map = nullptr;
         // Joint transform
         float* joint_transform = nullptr;
     } device;

@@ -56,17 +56,45 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
             return;
         }
     }
-    const uint64_t warp_idx = uint64_t(coords[0]) * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE +
-        coords[1] * N3_WARP_GRID_SIZE + coords[2];
-    _WarpGridItem& warp_out = tree.warp[warp_idx];
+    const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
+    _WarpGridItem& warp_out = tree.warp[warp_id];
     half sigma = tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1];
-    if (__half2float(warp_out.max_sigma) < __half2float(sigma)) {
+    const float max_sigma = __half2float(warp_out.max_sigma);
+    if (max_sigma < __half2float(sigma)) {
         warp_out.max_sigma = sigma;
         for (int i = 0; i < 12; ++i) {
             warp_out.transform[i] = __float2half(inv_lbs_trans[i]);
         }
+
+        if (max_sigma == 0.0f) {
+            uint32_t warp_subidx = warp_id;
+            uint32_t subgrid_off = 0;
+            uint32_t subgrid_sz = N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
+            do {
+                tree.warp_dist_map[subgrid_off + warp_subidx] = 0;
+                warp_subidx >>= 3;
+                subgrid_off += subgrid_sz;
+                subgrid_sz >>= 3;
+            } while (subgrid_sz > 0);
+        }
     }
 }  // void nn_weights_kernel
+
+__global__ static void warp_dist_prop_kernel(TreeSpec tree) {
+    CUDA_GET_THREAD_ID(warp_id, N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE);
+    uint32_t cnt = 0;
+    uint32_t warp_subidx = warp_id;
+    uint32_t subgrid_off = 0;
+    uint32_t subgrid_sz = N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
+    do {
+        if (tree.warp_dist_map[subgrid_off + warp_subidx] != 255) break;
+        warp_subidx >>= 3;
+        subgrid_off += subgrid_sz;
+        subgrid_sz >>= 3;
+        ++cnt;
+    } while (subgrid_sz > 0);
+    tree.warp_dist_map[warp_id] = (uint8_t) cnt;
+}
 
 __global__ static void debug_lbs_draw_kernel(TreeSpec tree) {
     CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
@@ -193,6 +221,11 @@ void N3Tree::update_kintree_cuda() {
     if (device.warp == nullptr) {
         cuda(Malloc((void**)&device.warp, warp_size));
     }
+    const size_t warp_dist_map_size = 2 * N3_WARP_GRID_SIZE *
+        N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
+    if (device.warp_dist_map == nullptr) {
+        cuda(Malloc((void**)&device.warp_dist_map, warp_dist_map_size));
+    }
     {
         const size_t size = 12 * n_joints * sizeof(float);
         if (device.joint_transform == nullptr) {
@@ -205,10 +238,21 @@ void N3Tree::update_kintree_cuda() {
 
     // TODO: remove this memset by recording the nonzero entries
     cuda(Memset(device.warp, 0, warp_size));
-    const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
-    device::lbs_transform_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    cuda(Memset(device.warp_dist_map, -1, warp_dist_map_size));
+    {
+        const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
+        device::lbs_transform_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    }
+
+    {
+        const int blocks = N_BLOCKS_NEEDED(warp_dist_map_size / 2, N_CUDA_THREADS);
+        device::warp_dist_prop_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    }
     // For debugging / verification
-    device::debug_lbs_draw_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    {
+        // const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
+        // device::debug_lbs_draw_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+    }
 }
 
 void N3Tree::free_cuda() {
@@ -221,6 +265,7 @@ void N3Tree::free_cuda() {
     if (device.lbs_weight_start != nullptr) cuda(Free(device.lbs_weight_start));
     if (device.lbs_weight != nullptr) cuda(Free(device.lbs_weight));
     if (device.warp != nullptr) cuda(Free(device.warp));
+    if (device.warp_dist_map != nullptr) cuda(Free(device.warp_dist_map));
     if (device.joint_transform != nullptr) cuda(Free(device.joint_transform));
     if (device.bbox != nullptr) cuda(Free(device.bbox));
     if (device.inv_ptr != nullptr) cuda(Free(device.inv_ptr));
