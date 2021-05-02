@@ -28,8 +28,9 @@ __global__ static void set_zero_kernel(TreeSpec tree) {
 }
 
 __global__ static void lbs_transform_kernel(TreeSpec tree) {
+    // Go through canonical space leaf voxels
     CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
-    // Compute LBS transform
+    // Compute LBS transform at this voxel
     float lbs_trans[12];
     float inv_lbs_trans[12];
     for (int i = 0; i < 12; ++i) lbs_trans[i] = 0.f;
@@ -40,14 +41,17 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
         for (int i = 0; i < 12; ++i) lbs_trans[i] += trans_in[i] * wt;
     }
 
-    // Invert LBS transform
+    // Invert the LBS transform
     if (!_inv_affine_cm12(lbs_trans, inv_lbs_trans)) {
         // Singular
         return;
     }
     half sigma = tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1];
 
-    // Try some points
+    // Transform some points within the voxel into pose space
+    // and set the transform in tree.warp, the inverse warp grid
+    // (We do it for several points per voxel to reduce the number
+    //  of holes caused by splatting)
     int coords[3];
     float src_pos[3];
     float targ_pos[3];
@@ -62,6 +66,7 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
             src_pos[1] = j * dy + bbox.xyz[1];
             for (int k = -HALF_N_POINTS; k <= HALF_N_POINTS; ++k) {
                 src_pos[2] = k * dz + bbox.xyz[2];
+                // Transform it to the posed space
                 _mv_affine(lbs_trans, src_pos, targ_pos);
 
                 transform_coord(targ_pos, tree.offset, tree.scale);
@@ -69,6 +74,10 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
                 coords[1] = floorf(targ_pos[1] * N3_WARP_GRID_SIZE);
                 coords[2] = floorf(targ_pos[2] * N3_WARP_GRID_SIZE);
 
+                // TODO: bounds right now are same as rest pose bounds.
+                // If you move the human too much parts of the body will disappear,
+                // due to going out of bounds.
+                // Ideally the bounds should be auto-updated with each kintree update.
                 if (coords[0] < 0 || coords[1] < 0 || coords[2] < 0 ||
                         coords[0] >= N3_WARP_GRID_SIZE || coords[1] >= N3_WARP_GRID_SIZE ||
                         coords[2] >= N3_WARP_GRID_SIZE) {
@@ -78,13 +87,19 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
 
                 const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
                 _WarpGridItem& warp_out = tree.warp[warp_id];
+                // Only keep the voxel with highest density
                 if (__half2float(warp_out.max_sigma) < __half2float(sigma)) {
                     warp_out.max_sigma = sigma;
+                    // Set the warp in the posed space warp grid
                     for (int i = 0; i < 12; ++i) {
                         warp_out.transform[i] = __float2half(inv_lbs_trans[i]);
                     }
 
                     if (tree.warp_dist_map[warp_id] == 255) {
+                        // In warp_dist_map, store 0 if each voxel is occupied.
+                        // Also propagates to parent voxels in the implicit tree.
+                        // (Note warp_dist_map was set to 255 uniformly before this kernel)
+                        // Also see the comment above the kernel below.
                         uint32_t warp_subidx = warp_id;
                         uint32_t subgrid_off = 0;
                         uint32_t subgrid_sz = N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
@@ -101,8 +116,23 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
     }  // for i
 
 
-}  // void nn_weights_kernel
+}  // void lbs_transform_kernel
 
+// This kernel propagates the warp_dist_map, which stores
+// the smallest i s.t. the size 2^i 'octree voxel' is nonempty around the point.
+// used for accelerating rendering.
+
+// warp_dist_map is stored as an linear tree structure of
+// hierarchical sections as follows (concatenated):
+// [256^3, 128^3, 64^3, ..., 1^3]
+// Each level is stored using Morton code.
+// For element n, the parent is n / 8 in the next section.
+
+// Initially (after lbs_transform_kernel), each tree node is 0 if any
+// child voxel is occupied, or 255 else.
+// The function below makes the first 256^3 section store the distance to the
+// first ancestor which has an occupied child, for use when rendering.
+// The rest of the tree is small and just left unused after this.
 __global__ static void warp_dist_prop_kernel(TreeSpec tree) {
     CUDA_GET_THREAD_ID(warp_id, N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE);
     uint32_t cnt = 0;
@@ -119,6 +149,7 @@ __global__ static void warp_dist_prop_kernel(TreeSpec tree) {
     tree.warp_dist_map[warp_id] = (uint8_t) cnt;
 }
 
+// This unused kernel is for debugging purposes
 __global__ static void debug_lbs_draw_kernel(TreeSpec tree) {
     CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
     half* data_ptr = tree.data + tree.inv_ptr[idx] * tree.data_dim;
@@ -258,7 +289,6 @@ void N3Tree::update_kintree_cuda() {
                     cudaMemcpyHostToDevice));
     }
 
-    // TODO: remove this memset by recording the nonzero entries
     cuda(Memset(device.warp, 0, warp_size));
     const int leaf_blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
     const int warp_3d_blocks = N_BLOCKS_NEEDED(N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE *

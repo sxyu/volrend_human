@@ -99,14 +99,6 @@ __device__ __inline__ void trace_ray(
         uint32_t ul[3];
         scalar_t pos[3], pos_world[3];//, tmp;
         const half* tree_val;
-        // scalar_t basis_fn[VOLREND_GLOBAL_BASIS_MAX];
-        // maybe_precalc_basis(tree, vdir, basis_fn);
-        // for (int i = 0; i < opt.basis_minmax[0]; ++i) {
-        //     basis_fn[i] = 0.f;
-        // }
-        // for (int i = opt.basis_minmax[1] + 1; i < VOLREND_GLOBAL_BASIS_MAX; ++i) {
-        //     basis_fn[i] = 0.f;
-        // }
 
         scalar_t light_intensity = 1.f;
         scalar_t t = tmin;
@@ -128,7 +120,9 @@ __device__ __inline__ void trace_ray(
                 const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
                 const uint8_t warp_dist = tree.warp_dist_map[warp_id];
                 if (warp_dist > 0) {
-                    // FIXME correct this step step to use dda_unit
+                    // This warp cell in pose space is empty, so we
+                    // skip for an appropriate distance
+                    // according to the computed warp_dist_map
                     const uint32_t cell_scale = (1 << (uint32_t)(warp_dist - 1));
                     const float inv_cell_scale = 1.f / cell_scale;
                     const uint32_t cell_ul_shift = 3 * (warp_dist - 1);
@@ -139,10 +133,6 @@ __device__ __inline__ void trace_ray(
                     for (int j = 0; j < 3; ++j)  {
                         pos[j] = (pos[j] - ul[j]) * inv_cell_scale;
                     }
-                    // if (pos[0] < 0 || pos[1] < 0 || pos[2] < 0 ||
-                    //     pos[0] >= 1 || pos[1] >= 1 || pos[2] >= 1) {
-                    //     printf("%f %f %f\n", pos[0], pos[1], pos[2]);
-                    // }
 
                     const scalar_t t_subcube = _dda_unit(pos, invdir);
                     const scalar_t delta_t = t_subcube * (float(cell_scale) / N3_WARP_GRID_SIZE);
@@ -151,8 +141,9 @@ __device__ __inline__ void trace_ray(
                 }
                 const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
 
-                // TODO: trilinear
+                // TODO: trilinear interpolate the warp
                 const half* m = warp.transform;
+                // Perform inverse LBS
                 for (int j = 0; j < 3; ++j) {
                     pos[j] = __half2float(m[j]) * pos_world[0] +
                         __half2float(m[3 + j]) * pos_world[1] +
@@ -163,10 +154,11 @@ __device__ __inline__ void trace_ray(
                 sigma = __half2float(warp.max_sigma);
             }
 
+            // Now pos is the position in canonical space, query the octree
             query_single_from_root(tree, pos, &tree_val, &cube_sz);
 
-            // const scalar_t t_subcube = _dda_unit(pos, invdir) / cube_sz;
             sigma = min(sigma, __half2float(tree_val[tree.data_dim - 1]));
+            // Volume rendering step
             if (sigma > opt.sigma_thresh) {
                 scalar_t att = expf(-delta_t * sigma);
                 const scalar_t weight = light_intensity * (1.f - att);
@@ -174,53 +166,9 @@ __device__ __inline__ void trace_ray(
                 if (opt.render_depth) {
                     out[0] += weight * t;
                 } else {
-//                     if (tree.data_format.basis_dim >= 0) {
-//                         int off = 0;
-// #define MUL_BASIS_I(v) basis_fn[v] * __half2float(tree_val[off + v])
-// #pragma unroll 3
-//                         for (int u = 0; u < 3; ++ u) {
-//                             tmp = basis_fn[0] * __half2float(tree_val[off]);
-//                             switch(tree.data_format.basis_dim) {
-//                                 case 25:
-//                                     tmp += MUL_BASIS_I(16) +
-//                                         MUL_BASIS_I(17) +
-//                                         MUL_BASIS_I(18) +
-//                                         MUL_BASIS_I(19) +
-//                                         MUL_BASIS_I(20) +
-//                                         MUL_BASIS_I(21) +
-//                                         MUL_BASIS_I(22) +
-//                                         MUL_BASIS_I(23) +
-//                                         MUL_BASIS_I(24);
-//                                 case 16:
-//                                     tmp += MUL_BASIS_I(9) +
-//                                           MUL_BASIS_I(10) +
-//                                           MUL_BASIS_I(11) +
-//                                           MUL_BASIS_I(12) +
-//                                           MUL_BASIS_I(13) +
-//                                           MUL_BASIS_I(14) +
-//                                           MUL_BASIS_I(15);
-//
-//                                 case 9:
-//                                     tmp += MUL_BASIS_I(4) +
-//                                         MUL_BASIS_I(5) +
-//                                         MUL_BASIS_I(6) +
-//                                         MUL_BASIS_I(7) +
-//                                         MUL_BASIS_I(8);
-//
-//                                 case 4:
-//                                     tmp += MUL_BASIS_I(1) +
-//                                         MUL_BASIS_I(2) +
-//                                         MUL_BASIS_I(3);
-//                             }
-//                             out[u] += weight / (1.f + expf(-tmp));
-//                             off += tree.data_format.basis_dim;
-//                         }
-// #undef MUL_BASIS_I
-//                     } else {
-                        out[0] += __half2float(tree_val[0]) * weight;
-                        out[1] += __half2float(tree_val[1]) * weight;
-                        out[2] += __half2float(tree_val[2]) * weight;
-                    // }
+                    out[0] += __half2float(tree_val[0]) * weight;
+                    out[1] += __half2float(tree_val[1]) * weight;
+                    out[2] += __half2float(tree_val[2]) * weight;
                 }
 
                 light_intensity *= att;
