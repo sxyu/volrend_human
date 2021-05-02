@@ -130,6 +130,8 @@ struct VolumeRenderer::Impl {
         glViewport(0, 0, width, height);
     }
 
+    N3Tree* tree;
+
    private:
     void auto_size_2d(size_t size, size_t& width, size_t& height,
                       int base_dim = 1) {
@@ -262,8 +264,6 @@ struct VolumeRenderer::Impl {
     Camera& camera;
     RenderOptions& options;
 
-    N3Tree* tree;
-
     GLuint program = -1;
     GLuint tex_tree_data = -1, tex_tree_child, tex_tree_extra;
     GLuint vao_quad;
@@ -283,6 +283,7 @@ VolumeRenderer::~VolumeRenderer() {}
 void VolumeRenderer::render() { impl_->render(); }
 
 void VolumeRenderer::set(N3Tree& tree) { impl_->set(tree); }
+const N3Tree& VolumeRenderer::get() const { return *impl_->tree; }
 void VolumeRenderer::clear() { impl_->clear(); }
 
 void VolumeRenderer::resize(int width, int height) {

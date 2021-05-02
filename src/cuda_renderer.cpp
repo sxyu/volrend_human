@@ -218,6 +218,7 @@ VolumeRenderer::~VolumeRenderer() {}
 
 void VolumeRenderer::render() { impl_->render(); }
 void VolumeRenderer::set(N3Tree& tree) { impl_->set(tree); }
+const N3Tree& VolumeRenderer::get() const { return *impl_->tree; }
 void VolumeRenderer::clear() { impl_->tree = nullptr; }
 
 void VolumeRenderer::resize(int width, int height) {

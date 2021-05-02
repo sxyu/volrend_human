@@ -421,6 +421,20 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action,
                 std::flush(std::cout);
             } break;
 
+            case GLFW_KEY_P: {
+                // Print pose
+                std::cout << "Pose:\n";
+                const N3Tree& tree = rend.get();
+                for (int i = 0; i < tree.pose.size(); ++i) {
+                    for (int j = 0; j < 3; ++j) {
+                        if (j) std::cout << " ";
+                        std::cout << tree.pose[i][j];
+                    }
+                    std::cout << "\n";
+                }
+                std::flush(std::cout);
+            } break;
+
 #ifdef VOLREND_CUDA
             case GLFW_KEY_I:
             case GLFW_KEY_J:

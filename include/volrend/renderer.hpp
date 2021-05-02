@@ -21,6 +21,9 @@ struct VolumeRenderer {
     // Set volumetric data to render
     void set(N3Tree& tree);
 
+    // Get tree
+    const N3Tree& get() const;
+
     // Clear the volumetric data
     void clear();
 
