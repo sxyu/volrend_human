@@ -254,7 +254,7 @@ void _gen_bbox_impl(const N3Tree& tree, size_t nodeid, size_t xi, size_t yi,
                                  tree.scale[1],
                              ((float)(k + 0.5) / gridsz - tree.offset[2]) /
                                  tree.scale[2],
-                             1.f / gridsz});
+                             0.5f / gridsz});
                         // 1.f / gridsz / tree.scale[0],
                         // 1.f / gridsz / tree.scale[1],
                         // 1.f / gridsz / tree.scale[2]

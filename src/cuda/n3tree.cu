@@ -22,62 +22,85 @@ namespace {
 const int N_CUDA_THREADS = 512;
 
 namespace device {
+__global__ static void set_zero_kernel(TreeSpec tree) {
+    CUDA_GET_THREAD_ID(warp_id, N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE);
+    tree.warp[warp_id].max_sigma = 0.0;
+}
+
 __global__ static void lbs_transform_kernel(TreeSpec tree) {
     CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
+    // Compute LBS transform
+    float lbs_trans[12];
     float inv_lbs_trans[12];
-    int coords[3];
-    {
-        float lbs_trans[12];
-        float targ_pos[3];
-
-        for (int i = 0; i < 12; ++i) lbs_trans[i] = 0.f;
-        for (int i = tree.lbs_weight_start[idx]; i < tree.lbs_weight_start[idx + 1]; ++i) {
-            const _LBSWeightItem& it = tree.lbs_weight[i];
-            const float wt = __half2float(it.weight);
-            const float* trans_in = tree.joint_transform + 12 * it.index;
-            for (int i = 0; i < 12; ++i) lbs_trans[i] += trans_in[i] * wt;
-        }
-
-        _mv_affine(lbs_trans, tree.bbox[idx].xyz, targ_pos);
-        transform_coord(targ_pos, tree.offset, tree.scale);
-
-        coords[0] = floorf(targ_pos[0] * N3_WARP_GRID_SIZE);
-        coords[1] = floorf(targ_pos[1] * N3_WARP_GRID_SIZE);
-        coords[2] = floorf(targ_pos[2] * N3_WARP_GRID_SIZE);
-
-        if (coords[0] < 0 || coords[1] < 0 || coords[2] < 0 ||
-            coords[0] >= N3_WARP_GRID_SIZE || coords[1] >= N3_WARP_GRID_SIZE ||
-            coords[2] >= N3_WARP_GRID_SIZE) {
-            // Out of bounds
-            return;
-        }
-        if (!_inv_affine_cm12(lbs_trans, inv_lbs_trans)) {
-            // Singular
-            return;
-        }
+    for (int i = 0; i < 12; ++i) lbs_trans[i] = 0.f;
+    for (int i = tree.lbs_weight_start[idx]; i < tree.lbs_weight_start[idx + 1]; ++i) {
+        const _LBSWeightItem& it = tree.lbs_weight[i];
+        const float wt = __half2float(it.weight);
+        const float* trans_in = tree.joint_transform + 12 * it.index;
+        for (int i = 0; i < 12; ++i) lbs_trans[i] += trans_in[i] * wt;
     }
-    const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
-    _WarpGridItem& warp_out = tree.warp[warp_id];
+
+    // Invert LBS transform
+    if (!_inv_affine_cm12(lbs_trans, inv_lbs_trans)) {
+        // Singular
+        return;
+    }
     half sigma = tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1];
-    const float max_sigma = __half2float(warp_out.max_sigma);
-    if (max_sigma < __half2float(sigma)) {
-        warp_out.max_sigma = sigma;
-        for (int i = 0; i < 12; ++i) {
-            warp_out.transform[i] = __float2half(inv_lbs_trans[i]);
-        }
 
-        if (max_sigma == 0.0f) {
-            uint32_t warp_subidx = warp_id;
-            uint32_t subgrid_off = 0;
-            uint32_t subgrid_sz = N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
-            do {
-                tree.warp_dist_map[subgrid_off + warp_subidx] = 0;
-                warp_subidx >>= 3;
-                subgrid_off += subgrid_sz;
-                subgrid_sz >>= 3;
-            } while (subgrid_sz > 0);
-        }
-    }
+    // Try some points
+    int coords[3];
+    float src_pos[3];
+    float targ_pos[3];
+    constexpr int HALF_N_POINTS = 2;
+    const _BBoxItem& __restrict__ bbox = tree.bbox[idx];
+    float dx = tree.bbox[idx].size * (1.f / (tree.scale[0] * (HALF_N_POINTS + 0.5)));
+    float dy = tree.bbox[idx].size * (1.f / (tree.scale[1] * (HALF_N_POINTS + 0.5)));
+    float dz = tree.bbox[idx].size * (1.f / (tree.scale[2] * (HALF_N_POINTS + 0.5)));
+    for (int i = -HALF_N_POINTS; i <= HALF_N_POINTS; ++i) {
+        src_pos[0] = i * dx + bbox.xyz[0];
+        for (int j = -HALF_N_POINTS; j <= HALF_N_POINTS; ++j) {
+            src_pos[1] = j * dy + bbox.xyz[1];
+            for (int k = -HALF_N_POINTS; k <= HALF_N_POINTS; ++k) {
+                src_pos[2] = k * dz + bbox.xyz[2];
+                _mv_affine(lbs_trans, src_pos, targ_pos);
+
+                transform_coord(targ_pos, tree.offset, tree.scale);
+                coords[0] = floorf(targ_pos[0] * N3_WARP_GRID_SIZE);
+                coords[1] = floorf(targ_pos[1] * N3_WARP_GRID_SIZE);
+                coords[2] = floorf(targ_pos[2] * N3_WARP_GRID_SIZE);
+
+                if (coords[0] < 0 || coords[1] < 0 || coords[2] < 0 ||
+                        coords[0] >= N3_WARP_GRID_SIZE || coords[1] >= N3_WARP_GRID_SIZE ||
+                        coords[2] >= N3_WARP_GRID_SIZE) {
+                    // Out of bounds
+                    continue;
+                }
+
+                const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
+                _WarpGridItem& warp_out = tree.warp[warp_id];
+                if (__half2float(warp_out.max_sigma) < __half2float(sigma)) {
+                    warp_out.max_sigma = sigma;
+                    for (int i = 0; i < 12; ++i) {
+                        warp_out.transform[i] = __float2half(inv_lbs_trans[i]);
+                    }
+
+                    if (tree.warp_dist_map[warp_id] == 255) {
+                        uint32_t warp_subidx = warp_id;
+                        uint32_t subgrid_off = 0;
+                        uint32_t subgrid_sz = N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE;
+                        do {
+                            tree.warp_dist_map[subgrid_off + warp_subidx] = 0;
+                            warp_subidx >>= 3;
+                            subgrid_off += subgrid_sz;
+                            subgrid_sz >>= 3;
+                        } while (subgrid_sz > 0);
+                    }  // if warp_dist_map == 255
+                }  // if max_sigma < sigma
+            }  // for k
+        }  // for j
+    }  // for i
+
+
 }  // void nn_weights_kernel
 
 __global__ static void warp_dist_prop_kernel(TreeSpec tree) {
@@ -148,7 +171,7 @@ __global__ static void debug_lbs_draw_kernel(TreeSpec tree) {
     //     data_ptr[1] = 0.f;
     //     data_ptr[2] = 1.f;
     // }
-}  // void nn_weights_kernel
+}
 }  // namespace device
 }  // namespace
 
@@ -237,21 +260,17 @@ void N3Tree::update_kintree_cuda() {
 
     // TODO: remove this memset by recording the nonzero entries
     cuda(Memset(device.warp, 0, warp_size));
+    const int leaf_blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
+    const int warp_3d_blocks = N_BLOCKS_NEEDED(N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE *
+            N3_WARP_GRID_SIZE, N_CUDA_THREADS);
+    device::set_zero_kernel<<<warp_3d_blocks, N_CUDA_THREADS>>>(*this);
     cuda(Memset(device.warp_dist_map, -1, warp_dist_map_size));
-    {
-        const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
-        device::lbs_transform_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
-    }
-
-    {
-        const int blocks = N_BLOCKS_NEEDED(N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE *
-                                           N3_WARP_GRID_SIZE, N_CUDA_THREADS);
-        device::warp_dist_prop_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
-    }
+    device::lbs_transform_kernel<<<leaf_blocks, N_CUDA_THREADS>>>(*this);
+    device::warp_dist_prop_kernel<<<warp_3d_blocks, N_CUDA_THREADS>>>(*this);
     // For debugging / verification
     {
         // const int blocks = N_BLOCKS_NEEDED(inv_ptr_.size(), N_CUDA_THREADS);
-        // device::debug_lbs_draw_kernel<<<blocks, N_CUDA_THREADS>>>(*this);
+        // device::debug_lbs_draw_kernel<<<leaf_blocks, N_CUDA_THREADS>>>(*this);
     }
 }
 

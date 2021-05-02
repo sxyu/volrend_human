@@ -24,7 +24,9 @@ namespace volrend {
 struct _BBoxItem {
     _BBoxItem(float x, float y, float z, float size)
         : xyz{x, y, z}, size(size) {}
+    // Center of voxel box
     float xyz[3];
+    // 1/2 side length
     float size;
 };
 
