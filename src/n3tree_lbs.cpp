@@ -126,6 +126,7 @@ void N3Tree::update_kintree() {
         }
     }
     joint_pos_posed_.resize(n_joints);
+    this->pose_mats = pose_mats;
     for (size_t i = 0; i < pose.size(); ++i) {
         joint_pos_posed_[i] = pose_mats[i][3];
         pose_mats[i][3] -=
@@ -136,42 +137,8 @@ void N3Tree::update_kintree() {
         for (int j = 0; j < 4; ++j) {
             for (int k = 0; k < 3; ++k) {
                 jtrans_ptr[j * 3 + k] = pose_mats[i][j][k];
-                // std::cerr << jtrans_ptr[j * 3 + k] << " ";
             }
-            // std::cerr << "\n";
         }
-        // Debug
-        // std::cerr << "\n----\n";
-        // float inv_test[12];
-        // if (!_inv_affine_cm12(jtrans_ptr, inv_test)) {
-        //     std::cerr << "SINGULAR\n";
-        //     std::cerr << "DET " << _detr_3x3(jtrans_ptr) << "\n";
-        // }
-        // float t1[3] = {1, -1, 0.5};
-        // float t2[3], t3[3];
-        // _mv_affine(jtrans_ptr, t1, t2);
-        // _mv_affine(inv_test, t2, t3);
-        // if (std::fabs(t3[0] - t1[0]) > 1e-6 ||
-        //     std::fabs(t3[1] - t1[1]) > 1e-6 ||
-        //     std::fabs(t3[2] - t1[2]) > 1e-6) {
-        //     for (int r = 0; r < 3; ++r) {
-        //         std::cout << "[ ";
-        //         for (int c = 0; c < 4; ++c) {
-        //             std::cout << jtrans_ptr[c * 3 + r] << ", ";
-        //         }
-        //         std::cout << "],\n";
-        //     }
-        //     std::cout << "\nINV\n";
-        //     for (int r = 0; r < 3; ++r) {
-        //         std::cout << "[ ";
-        //         for (int c = 0; c < 4; ++c) {
-        //             std::cout << inv_test[c * 3 + r] << ", ";
-        //         }
-        //         std::cout << "],\n";
-        //     }
-        //     std::cout << "\n";
-        //     std::cout << t3[0] << " " << t3[1] << " " << t3[2] << "\n--\n\n";
-        // }
     }
 
 #ifdef VOLREND_CUDA

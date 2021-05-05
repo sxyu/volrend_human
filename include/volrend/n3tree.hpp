@@ -11,6 +11,7 @@
 #include "cnpy.h"
 
 #include "glm/vec3.hpp"
+#include "glm/mat4x4.hpp"
 
 #ifdef VOLREND_CUDA
 #include <cuda_fp16.h>
@@ -83,6 +84,7 @@ struct N3Tree {
 
     // Axis-angle pose at each joint, set by user (only used if rigged)
     std::vector<glm::vec3> pose;
+    std::vector<glm::mat4> pose_mats;
     // Root translation
     glm::vec3 trans;
 
