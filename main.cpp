@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include <chrono>
 #include <string>
 #include <fstream>
 
@@ -196,8 +197,7 @@ void glfw_mouse_button_callback(GLFWwindow* window, int button, int action,
     if (action == GLFW_PRESS) {
         cam.begin_drag(
             x, y, (mods & GLFW_MOD_SHIFT) || button == GLFW_MOUSE_BUTTON_MIDDLE,
-            button == GLFW_MOUSE_BUTTON_RIGHT ||
-                button == GLFW_MOUSE_BUTTON_MIDDLE);
+            button == GLFW_MOUSE_BUTTON_RIGHT);
     } else if (action == GLFW_RELEASE) {
         cam.end_drag();
     }
@@ -339,9 +339,15 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
 #ifdef VOLREND_CUDA
     static ImGui::FileBrowser open_obj_mesh_dialog(
         ImGuiFileBrowserFlags_MultipleSelection);
+    static ImGui::FileBrowser open_animation_dialog;
     if (open_obj_mesh_dialog.GetTitle().empty()) {
         open_obj_mesh_dialog.SetTypeFilters({".obj"});
         open_obj_mesh_dialog.SetTitle("Load basic triangle OBJ");
+    }
+    if (open_animation_dialog.GetTitle().empty()) {
+        open_animation_dialog.SetTypeFilters({".npy"});
+        open_animation_dialog.SetTitle(
+            "Load animation sequence (#frames x #joints x 3 matrix)");
     }
 #endif
     // static ImGui::FileBrowser open_tree_dialog;
@@ -478,6 +484,62 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
     }
 
 #ifdef VOLREND_CUDA
+    static bool animating = false;
+    static std::string anim_path;
+    static int anim_frame = 0;
+    static cnpy::NpyArray anim_arr;
+
+    static std::chrono::high_resolution_clock::time_point anim_tp;
+    static double anim_last_seconds = 0.f;
+    static const double anim_interval = 1.0 / 30;
+
+    auto goto_frame = [&] {
+        if (anim_path.empty()) return;
+
+        if (anim_arr.word_size == 8) {
+            const double* ptr =
+                anim_arr.data<double>() + anim_frame * tree.n_joints * 3;
+            for (int i = 0; i < tree.n_joints; ++i)
+                for (int j = 0; j < 3; ++j) tree.pose[i][j] = ptr[i * 3 + j];
+        } else {
+            const float* ptr =
+                anim_arr.data<float>() + anim_frame * tree.n_joints * 3;
+            for (int i = 0; i < tree.n_joints; ++i)
+                for (int j = 0; j < 3; ++j) tree.pose[i][j] = ptr[i * 3 + j];
+        }
+        tree.update_kintree();
+    };
+    if (animating) {
+        auto now = std::chrono::high_resolution_clock::now();
+        double seconds = std::chrono::duration<double>(now - anim_tp).count();
+        if (seconds >= anim_last_seconds + anim_interval) {
+            if (anim_frame < anim_arr.shape[0] - 1) {
+                anim_frame++;
+                goto_frame();
+                anim_last_seconds += anim_interval;
+            } else {
+                animating = false;
+            }
+        }
+    }
+
+    open_animation_dialog.Display();
+    if (open_animation_dialog.HasSelected()) {
+        // Open animation
+        anim_path = open_animation_dialog.GetSelected().string();
+        std::cout << "Loading animation: " << anim_path << "\n";
+        open_animation_dialog.ClearSelected();
+        anim_arr = cnpy::npy_load(anim_path);
+        if (anim_arr.shape.size() != 3 || anim_arr.shape[1] != tree.n_joints ||
+            anim_arr.shape[2] != 3 ||
+            (anim_arr.word_size != 8 && anim_arr.word_size != 4)) {
+            std::cerr << "ERROR: invalid animation file\n";
+            std::exit(1);
+        }
+        anim_frame = 0;
+        goto_frame();
+    }
+
     if (tree.is_rigged()) {
         ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
         if (ImGui::CollapsingHeader("Rigging")) {
@@ -486,12 +548,40 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 std::fill(tree.pose.begin(), tree.pose.end(), glm::vec3(0));
                 tree.update_kintree();
             }
+
+            ImGui::SameLine();
+            if (ImGui::Button("load anim##rig-loadanim")) {
+                open_animation_dialog.Open();
+            }
+            if (anim_path.size()) {
+                ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+                if (ImGui::TreeNode("Animation")) {
+                    ImGui::TextUnformatted(anim_path.c_str());
+                    if (ImGui::SliderInt("frame", &anim_frame, 0,
+                                         anim_arr.shape[0])) {
+                        goto_frame();
+                    }
+                    if (!animating) {
+                        if (ImGui::Button("Play")) {
+                            anim_last_seconds = 0.f;
+                            anim_tp = std::chrono::high_resolution_clock::now();
+                            animating = true;
+                        }
+                    } else {
+                        if (ImGui::Button("Pause")) {
+                            animating = false;
+                        }
+                    }
+                    ImGui::TreePop();
+                }
+            }
+
             if (ImGui::SliderFloat3("trans##rig", glm::value_ptr(tree.trans),
                                     -1.f, 1.f)) {
                 tree.update_kintree();
             }
 
-            const int STEP = 16;
+            const int STEP = 10;
             bool manip_updated = false;
             for (int j = 0; j < tree.n_joints; j += STEP) {
                 int end_idx = std::min(j + STEP, tree.n_joints);
@@ -529,10 +619,10 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                                               tree.pose_mats
                                                   [tree.kintree_table_[i]])) *
                                           rot;
-                                    glm::quat rot_q = glm::quat_cast(rot);
-                                    tree.pose[i] =
-                                        glm::axis(rot_q) * glm::angle(rot_q);
                                 }
+                                glm::quat rot_q = glm::quat_cast(rot);
+                                tree.pose[i] =
+                                    glm::axis(rot_q) * glm::angle(rot_q);
                                 manip_updated = true;
                             }
                             ImGui::TreePop();
@@ -551,7 +641,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
         ImGui::BeginGroup();
         for (int i = 0; i < (int)rend.meshes.size(); ++i) {
             auto& mesh = rend.meshes[i];
-            if (mesh.name.size() && mesh.name[0] == '_') {
+            if (mesh.name.size() && mesh.name[0] != '_') {
                 if (ImGui::TreeNode(mesh.name.c_str())) {
                     ImGui::PushItemWidth(230);
                     ImGui::SliderFloat3(

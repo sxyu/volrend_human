@@ -215,7 +215,7 @@ cnpy::NpyArray load_the_npy_file(FILE* fp, uint64_t uncompr_bytes) {
         cnpy::parse_npy_header(fp, word_size, shape, fortran_order);
 
     if (word_size == -1) {
-        // Try to skip a unreadable file (maybe pickleed)
+        // Try to skip a unreadable file (maybe pickled)
         if (~uncompr_bytes) {
             fseek(fp, uncompr_bytes - header_len - 1, SEEK_CUR);  // skip
         }
