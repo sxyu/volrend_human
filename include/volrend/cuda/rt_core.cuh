@@ -118,6 +118,7 @@ __device__ __inline__ void trace_ray(
                     coords[j] = floorf(pos[j]);
                 }
                 const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
+
                 const uint8_t warp_dist = tree.warp_dist_map[warp_id];
                 if (warp_dist > 0) {
                     // This warp cell in pose space is empty, so we
@@ -140,18 +141,52 @@ __device__ __inline__ void trace_ray(
                     continue;
                 }
                 const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
+                const uint32_t c000    = morton_code_3(coords[0]+1, coords[1], coords[2]);
+                _WarpGridItem& warp_out000 = tree.warp[c000];
 
-                // TODO: trilinear interpolate the warp
-                const half* m = warp.transform;
-                // Perform inverse LBS
-                for (int j = 0; j < 3; ++j) {
-                    pos[j] = __half2float(m[j]) * pos_world[0] +
-                        __half2float(m[3 + j]) * pos_world[1] +
-                        __half2float(m[6 + j]) * pos_world[2] +
-                        __half2float(m[9 + j]);
-                    pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
+                if (coords[0] < 1 || coords[1] < 1 || coords[2] < 1 ||
+                    coords[0] >= N3_WARP_GRID_SIZE - 1 || coords[1] >= N3_WARP_GRID_SIZE - 1 ||
+                    coords[2] >= N3_WARP_GRID_SIZE - 1) {   // Out of bounds, don't interpolate
+                    const half* m = warp.transform;
+                    for (int j = 0; j < 3; ++j) {
+                        pos[j] = __half2float(m[j]) * pos_world[0] +
+                                 __half2float(m[3 + j]) * pos_world[1] +
+                                 __half2float(m[6 + j]) * pos_world[2] +
+                                 __half2float(m[9 + j]);
+                        pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
+                    }
+                    sigma = __half2float(warp.max_sigma);
+
+                } else {
+                    const half* m = warp.transform;
+                    const uint32_t c000 = morton_code_3(coords[0]+1, coords[1]-1, coords[2]-1);
+                    const uint32_t c001 = morton_code_3(coords[0]+1, coords[1]-1, coords[2]+1);
+                    const uint32_t c010 = morton_code_3(coords[0]-1, coords[1]-1, coords[2]-1);
+                    const uint32_t c011 = morton_code_3(coords[0]-1, coords[1]-1, coords[2]+1);
+                    const uint32_t c100 = morton_code_3(coords[0]+1, coords[1]+1, coords[2]-1);
+                    const uint32_t c101 = morton_code_3(coords[0]+1, coords[1]+1, coords[2]+1);
+                    const uint32_t c110 = morton_code_3(coords[0]-1, coords[1]+1, coords[2]-1);
+                    const uint32_t c111 = morton_code_3(coords[0]-1, coords[1]+1, coords[2]+1);
+
+                    uint32_t neighbors[] = {c000, c001, c010, c011, c100, c101, c110, c111};
+                    float avg_transform[12];
+                    for (int k = 0; k < 12; k++) {
+                        avg_transform[k] = 0;
+                        for (int n = 0; n < 8; n++) {
+                            avg_transform[k] += __half2float(tree.warp[neighbors[n]].transform[k]);
+                        }
+                            avg_transform[k] = avg_transform[k] / 16.0 + __half2float(m[k]) / 2.0;
+                   }
+
+                    for (int j = 0; j < 3; ++j) {
+                        pos[j] = avg_transform[j] * pos_world[0] +
+                                avg_transform[3 + j] * pos_world[1] +
+                                avg_transform[6 + j] * pos_world[2] +
+                                avg_transform[9 + j];
+                        pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
+                    }
+                    sigma = __half2float(warp.max_sigma);
                 }
-                sigma = __half2float(warp.max_sigma);
             }
 
             // Now pos is the position in canonical space, query the octree
