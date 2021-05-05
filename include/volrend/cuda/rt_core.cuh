@@ -175,7 +175,7 @@ __device__ __inline__ void trace_ray(
                         for (int n = 0; n < 8; n++) {
                             avg_transform[k] += __half2float(tree.warp[neighbors[n]].transform[k]);
                         }
-                            avg_transform[k] = avg_transform[k] / 16.0 + __half2float(m[k]) / 2.0;
+                            avg_transform[k] = avg_transform[k] / 1024 + __half2float(m[k]) *127.0 / 128.0;
                    }
 
                     for (int j = 0; j < 3; ++j) {
