@@ -2583,7 +2583,8 @@ void DrawCubes(const float* view, const float* projection,
             const int perpYIndex = (normalIndex + 2) % 3;
             const float invert = (iFace > 2) ? -1.f : 1.f;
 
-            const vec_t faceCoords[4] = {
+            const float cubeScale = 0.05f;
+            vec_t faceCoords[4] = {
                 directionUnary[normalIndex] + directionUnary[perpXIndex] +
                     directionUnary[perpYIndex],
                 directionUnary[normalIndex] + directionUnary[perpXIndex] -
@@ -2593,6 +2594,9 @@ void DrawCubes(const float* view, const float* projection,
                 directionUnary[normalIndex] - directionUnary[perpXIndex] +
                     directionUnary[perpYIndex],
             };
+            for (int i = 0; i < 4; ++i) {
+                faceCoords[i] *= cubeScale;
+            }
 
             // clipping
             /*

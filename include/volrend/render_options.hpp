@@ -49,6 +49,13 @@ struct RenderOptions {
     bool enable_probe = false;
     float probe[3] = {0.f, 0.f, 1.f};
     int probe_disp_size = 100;
+
+    // Stores joint selection delta for rigged model
+    // (maybe find a better way to do this)
+    // -2   = deselect all
+    // -1   = do nothing
+    // >= 0 = select only joint i
+    int selected_joint = -1;
 #endif
 };
 

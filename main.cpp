@@ -195,9 +195,45 @@ void glfw_mouse_button_callback(GLFWwindow* window, int button, int action,
     double x, y;
     glfwGetCursorPos(window, &x, &y);
     if (action == GLFW_PRESS) {
-        cam.begin_drag(
-            x, y, (mods & GLFW_MOD_SHIFT) || button == GLFW_MOUSE_BUTTON_MIDDLE,
-            button == GLFW_MOUSE_BUTTON_RIGHT);
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            const N3Tree& tree = rend.get();
+            glm::mat4 w2c = glm::affineInverse(glm::mat4(cam.transform));
+            glm::mat4 camera_persp_prj(cam.fx / cam.width * 2.0, 0.f, 0.f, 0.f,
+                                       0.f, cam.fy / cam.height * 2.0, 0.f, 0.f,
+                                       0.f, 0.f, -1.0002f, -1.f, 0.f, 0.f,
+                                       -0.02f, 0.f);
+
+            glm::mat4 VP = camera_persp_prj * w2c;
+            glm::vec2 mouse(x, y);
+
+            const float SELECT_SCREEN_THRESH = 15.f / 800.f * cam.width;
+
+            float min_z = 1e9f;
+            int min_joint = -1;
+            for (int i = 0; i < tree.n_joints; ++i) {
+                glm::vec4 pix = VP * glm::vec4(tree.joint_pos_posed_[i], 1.f);
+                pix /= pix[3];
+                pix[0] = (pix[0] + 1.f) * cam.width * 0.5f;
+                pix[1] = (-pix[1] + 1.f) * cam.height * 0.5f;
+
+                float dist = glm::length(glm::vec2(pix) - mouse);
+                if (dist < SELECT_SCREEN_THRESH && pix[2] < min_z) {
+                    min_z = pix[2];
+                    min_joint = i;
+                }
+            }
+
+            if (~min_joint) {
+                rend.options.selected_joint = min_joint;
+            } else {
+                rend.options.selected_joint = -2;
+            }
+        } else {
+            cam.begin_drag(
+                x, y,
+                (mods & GLFW_MOD_SHIFT) || button == GLFW_MOUSE_BUTTON_MIDDLE,
+                button == GLFW_MOUSE_BUTTON_RIGHT);
+        }
     } else if (action == GLFW_RELEASE) {
         cam.end_drag();
     }
@@ -275,18 +311,6 @@ void glfw_window_size_callback(GLFWwindow* window, int width, int height) {
     GET_RENDERER(window).resize(width, height);
 }
 
-bool edit_transform(float* cameraView, float* cameraProjection, float* matrix,
-                    int id) {
-    static ImGuizmo::MODE mCurrentGizmoMode(ImGuizmo::LOCAL);
-    static ImGuizmo::OPERATION mCurrentGizmoOperation(ImGuizmo::ROTATE);
-
-    static bool boundSizingSnap = false;
-    ImGuizmo::SetID(id);
-    return ImGuizmo::Manipulate(cameraView, cameraProjection,
-                                mCurrentGizmoOperation, mCurrentGizmoMode,
-                                matrix, NULL, NULL, NULL, NULL);
-}
-
 void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 const std::vector<std::string>& joint_names) {
     auto& cam = rend.camera;
@@ -295,19 +319,15 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
     ImGui::NewFrame();
 
     // clang-format off
-    static float camera_persp_prj[16] = {1.f, 0.f, 0.f, 0.f,
+    static glm::mat4 camera_persp_prj(1.f, 0.f, 0.f, 0.f,
                                          0.f, 1.f, 0.f, 0.f,
                                          0.f, 0.f, -1.f, -1.f,
-                                         0.f, 0.f, -0.001f, 0.f};
-    static float pose_mat[16] = {1.f, 0.f, 0.f, 0.f,
-                                 0.f, 1.f, 0.f, 0.f,
-                                 0.f, 0.f, 1.f, 0.f,
-                                 0.f, 0.f, 2.f, 1.f};
+                                         0.f, 0.f, -0.001f, 0.f);
     // clang-format on
     ImGuiIO& io = ImGui::GetIO();
 
-    camera_persp_prj[0] = cam.fx / cam.width * 2.0;
-    camera_persp_prj[5] = cam.fy / cam.height * 2.0;
+    camera_persp_prj[0][0] = cam.fx / cam.width * 2.0;
+    camera_persp_prj[1][1] = cam.fy / cam.height * 2.0;
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::SetGizmoSizeClipSpace(0.05f);
 
@@ -316,13 +336,6 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
     float viewManipulateRight = io.DisplaySize.x;
     float viewManipulateTop = 0;
     ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-    // Invert affine
-    // glm::vec3 inv_vec =
-    //     -glm::transpose(glm::mat3x3(cam.transform)) * cam.transform[3];
-    // for (int j = 0; j < 3; ++j) {
-    //     for (int i = 0; i < 3; ++i) camera_w2c[j * 4 + i] =
-    //     cam.transform[i][j]; camera_w2c[12 + j] = inv_vec[j];
-    // }
     glm::mat4 w2c = glm::affineInverse(glm::mat4(cam.transform));
 
     ImGui::SetNextWindowPos(ImVec2(20.f, 20.f), ImGuiCond_Once);
@@ -491,7 +504,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
 
     static std::chrono::high_resolution_clock::time_point anim_tp;
     static double anim_last_seconds = 0.f;
-    static const double anim_interval = 1.0 / 30;
+    static const double anim_interval = 1.0 / 20;
 
     auto goto_frame = [&] {
         if (anim_path.empty()) return;
@@ -548,14 +561,40 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 std::fill(tree.pose.begin(), tree.pose.end(), glm::vec3(0));
                 tree.update_kintree();
             }
+            ImGui::SameLine();
+            if (ImGui::Button("deselect##rig-desel")) {
+                rend.options.selected_joint = -2;
+            }
 
             ImGui::SameLine();
             if (ImGui::Button("load anim##rig-loadanim")) {
                 open_animation_dialog.Open();
             }
+            static std::string sel_joint_name = "";
+            if (rend.options.selected_joint >= 0) {
+                sel_joint_name = joint_names[rend.options.selected_joint];
+            } else if (rend.options.selected_joint == -2) {
+                sel_joint_name = "";
+            }
+            static bool show_joints = false;
+            ImGui::Checkbox("show joints", &show_joints);
+            if (show_joints) {
+                for (int j = 0; j < tree.n_joints; ++j) {
+                    ImGuizmo::DrawCubes(glm::value_ptr(w2c),
+                                        glm::value_ptr(camera_persp_prj),
+                                        glm::value_ptr(tree.pose_mats[j]), 1);
+                }
+            }
+
+            if (sel_joint_name.size()) {
+                ImGui::Text("selected joint: %s", sel_joint_name.c_str());
+            } else {
+                ImGui::TextUnformatted("left click to select joint");
+            }
+
             if (anim_path.size()) {
                 ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
-                if (ImGui::TreeNode("Animation")) {
+                if (ImGui::TreeNode("animation")) {
                     ImGui::TextUnformatted(anim_path.c_str());
                     if (ImGui::SliderInt("frame", &anim_frame, 0,
                                          anim_arr.shape[0])) {
@@ -576,13 +615,25 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 }
             }
 
-            if (ImGui::SliderFloat3("trans##rig", glm::value_ptr(tree.trans),
-                                    -1.f, 1.f)) {
-                tree.update_kintree();
-            }
-
-            const int STEP = 10;
             bool manip_updated = false;
+
+            if (ImGui::TreeNode("trans")) {
+                if (ImGui::SliderFloat3(
+                        "trans##rig", glm::value_ptr(tree.trans), -1.f, 1.f)) {
+                    manip_updated = true;
+                }
+                static glm::mat4 trans =
+                    glm::translate(glm::mat4(1.f), tree.trans);
+                if (ImGuizmo::Manipulate(
+                        glm::value_ptr(w2c), glm::value_ptr(camera_persp_prj),
+                        ImGuizmo::TRANSLATE, ImGuizmo::LOCAL,
+                        glm::value_ptr(trans), NULL, NULL, NULL, NULL)) {
+                    tree.trans = glm::vec3(trans[3]);
+                    manip_updated = true;
+                }
+                ImGui::TreePop();
+            }
+            const int STEP = 10;
             for (int j = 0; j < tree.n_joints; j += STEP) {
                 int end_idx = std::min(j + STEP, tree.n_joints);
                 std::string all_joint_names;
@@ -594,6 +645,10 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                     }
                 }
                 all_joint_names.append("..");
+                if (rend.options.selected_joint >= j &&
+                    rend.options.selected_joint < end_idx) {
+                    ImGui::SetNextTreeNodeOpen(true);
+                }
                 if (ImGui::TreeNode((std::to_string(j) + "-" +
                                      std::to_string(end_idx - 1) + ": " +
                                      all_joint_names)
@@ -602,6 +657,11 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                         const std::string id = std::to_string(i);
                         std::string joint_name = joint_names[i];
                         joint_name += "##rig_" + id;
+                        if (rend.options.selected_joint == i) {
+                            ImGui::SetNextTreeNodeOpen(true);
+                        } else if (~rend.options.selected_joint) {
+                            ImGui::SetNextTreeNodeOpen(false);
+                        }
                         if (ImGui::TreeNode(joint_name.c_str())) {
                             std::string slider_id = "axisangle##rig_sli_" + id;
                             if (ImGui::SliderFloat3(
@@ -610,9 +670,14 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                                     M_PI / 2)) {
                                 manip_updated = true;
                             }
-                            if (edit_transform(
-                                    glm::value_ptr(w2c), camera_persp_prj,
-                                    glm::value_ptr(tree.pose_mats[i]), i)) {
+
+                            ImGuizmo::SetID(i);
+                            if (ImGuizmo::Manipulate(
+                                    glm::value_ptr(w2c),
+                                    glm::value_ptr(camera_persp_prj),
+                                    ImGuizmo::ROTATE, ImGuizmo::LOCAL,
+                                    glm::value_ptr(tree.pose_mats[i]), NULL,
+                                    NULL, NULL, NULL)) {
                                 glm::mat3 rot = glm::mat3(tree.pose_mats[i]);
                                 if (i) {
                                     rot = glm::transpose(glm::mat3(
@@ -635,7 +700,8 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 tree.update_kintree();
             }
         }  // CollapsingHeader Rigging
-    }      // if tree.is_rigged
+        rend.options.selected_joint = -1;
+    }  // if tree.is_rigged
     ImGui::SetNextTreeNodeOpen(false, ImGuiCond_Once);
     if (ImGui::CollapsingHeader("Manipulation")) {
         ImGui::BeginGroup();
