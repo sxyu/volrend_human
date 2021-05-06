@@ -140,13 +140,25 @@ __device__ __inline__ void trace_ray(
                     t += delta_t + opt.step_size;
                     continue;
                 }
-                const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
-                const uint32_t c000    = morton_code_3(coords[0]+1, coords[1], coords[2]);
-                _WarpGridItem& warp_out000 = tree.warp[c000];
 
-                if (coords[0] < 1 || coords[1] < 1 || coords[2] < 1 ||
-                    coords[0] >= N3_WARP_GRID_SIZE - 1 || coords[1] >= N3_WARP_GRID_SIZE - 1 ||
-                    coords[2] >= N3_WARP_GRID_SIZE - 1) {   // Out of bounds, don't interpolate
+                const _WarpGridItem& __restrict__ warp = tree.warp[warp_id];
+
+                scalar_t x = pos[0] - 0.5;
+                scalar_t y = pos[1] - 0.5;
+                scalar_t z = pos[2] - 0.5;
+
+                uint32_t x0 = floorf(x);
+                uint32_t x1 = x0 + 1;
+                uint32_t y0 = floorf(y);
+                uint32_t y1 = y0 + 1;
+                uint32_t z0 = floorf(z);
+                uint32_t z1 = z0 + 1;
+
+//                printf("x: %f  y: %f  z: %f  x0: %d  y0: %d  z0: %d\n", x, y, z, x0, y0, z0);
+
+                if (x0 < 0 || y0 < 0 || z0 < 0 ||
+                    x1 >= N3_WARP_GRID_SIZE || y1 >= N3_WARP_GRID_SIZE ||
+                    z1 >= N3_WARP_GRID_SIZE) {
                     const half* m = warp.transform;
                     for (int j = 0; j < 3; ++j) {
                         pos[j] = __half2float(m[j]) * pos_world[0] +
@@ -158,35 +170,82 @@ __device__ __inline__ void trace_ray(
                     sigma = __half2float(warp.max_sigma);
 
                 } else {
-                    const half* m = warp.transform;
-                    const uint32_t c000 = morton_code_3(coords[0]+1, coords[1]-1, coords[2]-1);
-                    const uint32_t c001 = morton_code_3(coords[0]+1, coords[1]-1, coords[2]+1);
-                    const uint32_t c010 = morton_code_3(coords[0]-1, coords[1]-1, coords[2]-1);
-                    const uint32_t c011 = morton_code_3(coords[0]-1, coords[1]-1, coords[2]+1);
-                    const uint32_t c100 = morton_code_3(coords[0]+1, coords[1]+1, coords[2]-1);
-                    const uint32_t c101 = morton_code_3(coords[0]+1, coords[1]+1, coords[2]+1);
-                    const uint32_t c110 = morton_code_3(coords[0]-1, coords[1]+1, coords[2]-1);
-                    const uint32_t c111 = morton_code_3(coords[0]-1, coords[1]+1, coords[2]+1);
 
-                    uint32_t neighbors[] = {c000, c001, c010, c011, c100, c101, c110, c111};
-                    float avg_transform[12];
+                    const uint32_t c000 = morton_code_3(x1, y0, z0);
+                    const uint32_t c001 = morton_code_3(x1, y0, z1);
+                    const uint32_t c010 = morton_code_3(x0, y0, z0);
+                    const uint32_t c011 = morton_code_3(x0, y0, z1);
+                    const uint32_t c100 = morton_code_3(x1, y1, z0);
+                    const uint32_t c101 = morton_code_3(x1, y1, z1);
+                    const uint32_t c110 = morton_code_3(x0, y1, z0);
+                    const uint32_t c111 = morton_code_3(x0, y1, z1);
+
+                    float xd = x - x0;
+                    float yd = y - y0;
+                    float zd = z - z0;
+
+                    float interpolated_transform[12];
                     for (int k = 0; k < 12; k++) {
-                        avg_transform[k] = 0;
-                        for (int n = 0; n < 8; n++) {
-                            avg_transform[k] += __half2float(tree.warp[neighbors[n]].transform[k]);
-                        }
-                            avg_transform[k] = avg_transform[k] / 1024 + __half2float(m[k]) *127.0 / 128.0;
-                   }
+                        interpolated_transform[k] = 0;
+                        float v000 = __half2float(tree.warp[c000].transform[k]);
+                        float v001 = __half2float(tree.warp[c001].transform[k]);
+                        float v010 = __half2float(tree.warp[c010].transform[k]);
+                        float v011 = __half2float(tree.warp[c011].transform[k]);
+                        float v100 = __half2float(tree.warp[c100].transform[k]);
+                        float v101 = __half2float(tree.warp[c101].transform[k]);
+                        float v110 = __half2float(tree.warp[c110].transform[k]);
+                        float v111 = __half2float(tree.warp[c111].transform[k]);
 
+                        float v00 = v000 * (1 - xd) + v100 * xd;
+                        float v01 = v001 * (1 - xd) + v101 * xd;
+                        float v10 = v010 * (1 - xd) + v110 * xd;
+                        float v11 = v011 * (1 - xd) + v111 * xd;
+
+                        float v0 = v00 * (1 - yd) + v10 * yd;
+                        float v1 = v01 * (1 - yd) + v11 * yd;
+
+                        float v = v0 * (1 - zd) + v1 * zd;
+
+                        interpolated_transform[k] = v;
+                    }
                     for (int j = 0; j < 3; ++j) {
-                        pos[j] = avg_transform[j] * pos_world[0] +
-                                avg_transform[3 + j] * pos_world[1] +
-                                avg_transform[6 + j] * pos_world[2] +
-                                avg_transform[9 + j];
+                        pos[j] = __half2float(interpolated_transform[j]) * pos_world[0] +
+                                 __half2float(interpolated_transform[3 + j]) * pos_world[1] +
+                                 __half2float(interpolated_transform[6 + j]) * pos_world[2] +
+                                 __half2float(interpolated_transform[9 + j]);
                         pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
                     }
-                    sigma = __half2float(warp.max_sigma);
+                    float s000 = __half2float(tree.warp[c000].max_sigma);
+                    float s001 = __half2float(tree.warp[c001].max_sigma);
+                    float s010 = __half2float(tree.warp[c010].max_sigma);
+                    float s011 = __half2float(tree.warp[c011].max_sigma);
+                    float s100 = __half2float(tree.warp[c100].max_sigma);
+                    float s101 = __half2float(tree.warp[c101].max_sigma);
+                    float s110 = __half2float(tree.warp[c110].max_sigma);
+                    float s111 = __half2float(tree.warp[c111].max_sigma);
+
+                    float s00 = s000 * (1 - xd) + s100 * xd;
+                    float s01 = s001 * (1 - xd) + s101 * xd;
+                    float s10 = s010 * (1 - xd) + s110 * xd;
+                    float s11 = s011 * (1 - xd) + s111 * xd;
+
+                    float s0 = s00 * (1 - yd) + s10 * yd;
+                    float s1 = s01 * (1 - yd) + s11 * yd;
+
+                    float s = s0 * (1 - zd) + s1 * zd;
+//                    printf("xd: %f  yd: %f  zd: %f\n", xd, yd, zd);
+//                    printf("original: %f  s:%f   s000: %f  s001: %f  s010: %f  s011: %f  s100: %f  s101: %f  s110: %f  s111: %f  \n", __half2float(warp.max_sigma), s, s000, s001, s010, s011, s100, s101, s110, s111);
+//                    float arr[] = {s000, s001, s010, s011, s100, s101, s110, s111};
+//                    float max = s000;
+//                    for (int i = 0; i < 8; i++){
+//                        if (arr[i] > max){
+//                            max = arr[i];
+//                        }
+//                    }
+//                    sigma = max ;
+                    sigma = s; // interpolated max_sigma
                 }
+
             }
 
             // Now pos is the position in canonical space, query the octree
