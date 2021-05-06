@@ -128,9 +128,9 @@ __global__ void lbs_transform_kernel(TreeSpec tree) {
     float targ_pos[3];
     constexpr int HALF_N_POINTS = 1;
     const _BBoxItem& __restrict__ bbox = tree.bbox[idx];
-    float dx = tree.bbox[idx].size * (1.f / (tree.scale[0] * (HALF_N_POINTS + 0.5)));
-    float dy = tree.bbox[idx].size * (1.f / (tree.scale[1] * (HALF_N_POINTS + 0.5)));
-    float dz = tree.bbox[idx].size * (1.f / (tree.scale[2] * (HALF_N_POINTS + 0.5)));
+    float dx = tree.bbox[idx].size * (1.f / (tree.scale[0] * (HALF_N_POINTS + 1)));
+    float dy = tree.bbox[idx].size * (1.f / (tree.scale[1] * (HALF_N_POINTS + 1)));
+    float dz = tree.bbox[idx].size * (1.f / (tree.scale[2] * (HALF_N_POINTS + 1)));
     for (int i = -HALF_N_POINTS; i <= HALF_N_POINTS; ++i) {
         src_pos[0] = i * dx + bbox.xyz[0];
         for (int j = -HALF_N_POINTS; j <= HALF_N_POINTS; ++j) {

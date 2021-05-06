@@ -595,7 +595,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 if (ImGui::TreeNode("animation")) {
                     ImGui::TextUnformatted(anim_path.c_str());
                     if (ImGui::SliderInt("frame", &anim_frame, 0,
-                                         anim_arr.shape[0])) {
+                                         anim_arr.shape[0] - 1)) {
                         goto_frame();
                     }
                     if (!animating) {
