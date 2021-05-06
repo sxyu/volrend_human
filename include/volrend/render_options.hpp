@@ -56,6 +56,9 @@ struct RenderOptions {
     // -1   = do nothing
     // >= 0 = select only joint i
     int selected_joint = -1;
+
+    // Whether to show joints as ImGuizmo cubes
+    bool show_joints = false;
 #endif
 };
 

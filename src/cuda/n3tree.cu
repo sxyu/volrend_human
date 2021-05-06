@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <cassert>
 #include <thread>
-#include <atomic>
 #include <chrono>
 
 #include "volrend/cuda/n3tree_query.cuh"
@@ -27,7 +26,79 @@ __global__ static void set_zero_kernel(TreeSpec tree) {
     tree.warp[warp_id].max_sigma = 0.0;
 }
 
-__global__ static void lbs_transform_kernel(TreeSpec tree) {
+__global__ void _lbs_scale_kernel(TreeSpec tree) {
+    // This kernel stores min/max bounding box of transformed voxels
+    // within tree.scale_pose / tree.offset_pose resp.
+
+    // Go through canonical spane leaf voxels
+    CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
+    {
+        half sigma = tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1];
+        if (__half2float(sigma) < 1e-2) return;
+    }
+    // Compute LBS transform at this voxel
+    float lbs_trans[12];
+    float inv_lbs_trans[12];
+    for (int i = 0; i < 12; ++i) lbs_trans[i] = 0.f;
+    for (int i = tree.lbs_weight_start[idx]; i < tree.lbs_weight_start[idx + 1]; ++i) {
+        const _LBSWeightItem& it = tree.lbs_weight[i];
+        const float wt = __half2float(it.weight);
+        const float* trans_in = tree.joint_transform + 12 * it.index;
+        for (int i = 0; i < 12; ++i) lbs_trans[i] += trans_in[i] * wt;
+    }
+    if (!_inv_affine_cm12(lbs_trans, inv_lbs_trans)) {
+        // Singular
+        return;
+    }
+
+    // Transform it to the posed space
+    int coords[3];
+    float src_pos[3];
+    float targ_pos[3];
+    const _BBoxItem& __restrict__ bbox = tree.bbox[idx];
+    _mv_affine(lbs_trans, bbox.xyz, targ_pos);
+
+    // TODO reduce the number of atomics, use shared memory
+    for (int i = 0; i < 3; ++i) {
+        atomicMinf(&tree.scale_pose[i], targ_pos[i]);
+        atomicMaxf(&tree.offset_pose[i], targ_pos[i]);
+    }
+}
+
+__host__ void lbs_scale_launcher(const N3Tree& tree) {
+    // Determine offset_pose and scale_pose
+    float max_init3[3] = {-1e9, -1e9, -1e9};
+    float min_init3[3] = {1e9, 1e9, 1e9};
+
+    cuda(MemcpyAsync(tree.device.scale_pose, min_init3, sizeof(min_init3), cudaMemcpyHostToDevice));
+    cuda(MemcpyAsync(tree.device.offset_pose, max_init3, sizeof(max_init3), cudaMemcpyHostToDevice));
+
+    const int leaf_blocks = N_BLOCKS_NEEDED(tree.inv_ptr_.size(), N_CUDA_THREADS);
+    _lbs_scale_kernel<<<leaf_blocks, N_CUDA_THREADS>>>(tree);
+
+    cuda(MemcpyAsync(min_init3, tree.device.scale_pose, sizeof(min_init3), cudaMemcpyDeviceToHost));
+    cuda(MemcpyAsync(max_init3, tree.device.offset_pose, sizeof(max_init3), cudaMemcpyDeviceToHost));
+
+    float center[3], radius[3];
+    float max_radius = 0.f;
+    for (int i = 0; i < 3; ++i) {
+        center[i] = (max_init3[i] + min_init3[i]) * 0.5f;
+        radius[i] = (max_init3[i] - min_init3[i]) * 0.5f;
+        max_radius = std::max(radius[i], max_radius);
+    }
+    for (int i = 0; i < 3; ++i) {
+        radius[i] = max_radius;
+        tree.scale_pose[i] = 0.5f / radius[i];
+        tree.offset_pose[i] = 0.5f * (1.0f - center[i] / radius[i]);
+    }
+
+    cuda(MemcpyAsync(tree.device.scale_pose, tree.scale_pose.data(),
+                3 * sizeof(tree.scale_pose[0]), cudaMemcpyHostToDevice));
+    cuda(MemcpyAsync(tree.device.offset_pose, tree.offset_pose.data(),
+                3 * sizeof(tree.offset_pose[0]), cudaMemcpyHostToDevice));
+}
+
+__global__ void lbs_transform_kernel(TreeSpec tree) {
     // Go through canonical space leaf voxels
     CUDA_GET_THREAD_ID(idx, tree.n_leaves_compr);
     // Compute LBS transform at this voxel
@@ -46,7 +117,7 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
         // Singular
         return;
     }
-    half sigma = tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1];
+    const float sigma = __half2float(tree.data[(tree.inv_ptr[idx] + 1) * tree.data_dim - 1]);
 
     // Transform some points within the voxel into pose space
     // and set the transform in tree.warp, the inverse warp grid
@@ -55,7 +126,7 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
     int coords[3];
     float src_pos[3];
     float targ_pos[3];
-    constexpr int HALF_N_POINTS = 2;
+    constexpr int HALF_N_POINTS = 1;
     const _BBoxItem& __restrict__ bbox = tree.bbox[idx];
     float dx = tree.bbox[idx].size * (1.f / (tree.scale[0] * (HALF_N_POINTS + 0.5)));
     float dy = tree.bbox[idx].size * (1.f / (tree.scale[1] * (HALF_N_POINTS + 0.5)));
@@ -69,7 +140,7 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
                 // Transform it to the posed space
                 _mv_affine(lbs_trans, src_pos, targ_pos);
 
-                transform_coord(targ_pos, tree.offset, tree.scale);
+                transform_coord(targ_pos, tree.offset_pose, tree.scale_pose);
                 coords[0] = floorf(targ_pos[0] * N3_WARP_GRID_SIZE);
                 coords[1] = floorf(targ_pos[1] * N3_WARP_GRID_SIZE);
                 coords[2] = floorf(targ_pos[2] * N3_WARP_GRID_SIZE);
@@ -88,8 +159,8 @@ __global__ static void lbs_transform_kernel(TreeSpec tree) {
                 const uint32_t warp_id = morton_code_3(coords[0], coords[1], coords[2]);
                 _WarpGridItem& warp_out = tree.warp[warp_id];
                 // Only keep the voxel with highest density
-                if (__half2float(warp_out.max_sigma) < __half2float(sigma)) {
-                    warp_out.max_sigma = sigma;
+                float old_max_sigma = atomicMaxf(&warp_out.max_sigma, sigma);
+                if (old_max_sigma < sigma) {
                     // Set the warp in the posed space warp grid
                     for (int i = 0; i < 12; ++i) {
                         warp_out.transform[i] = __float2half(inv_lbs_trans[i]);
@@ -213,12 +284,10 @@ void N3Tree::load_cuda() {
     const size_t child_sz = (size_t) capacity * N3_ * sizeof(int32_t);
     cuda(Malloc((void**)&device.data, data_sz));
     cuda(Malloc((void**)&device.child, child_sz));
-    if (device.offset == nullptr) {
-        cuda(Malloc((void**)&device.offset, 3 * sizeof(float)));
-    }
-    if (device.scale == nullptr) {
-        cuda(Malloc((void**)&device.scale, 3 * sizeof(float)));
-    }
+    cuda(Malloc((void**)&device.offset, 3 * sizeof(float)));
+    cuda(Malloc((void**)&device.scale, 3 * sizeof(float)));
+    cuda(Malloc((void**)&device.offset_pose, 3 * sizeof(float)));
+    cuda(Malloc((void**)&device.scale_pose, 3 * sizeof(float)));
     cuda(MemcpyAsync(device.child, child_.data<int32_t>(), child_sz,
                 cudaMemcpyHostToDevice));
     const half* data_ptr = this->data_.data<half>();
@@ -294,6 +363,7 @@ void N3Tree::update_kintree_cuda() {
     const int warp_3d_blocks = N_BLOCKS_NEEDED(N3_WARP_GRID_SIZE * N3_WARP_GRID_SIZE *
             N3_WARP_GRID_SIZE, N_CUDA_THREADS);
     device::set_zero_kernel<<<warp_3d_blocks, N_CUDA_THREADS>>>(*this);
+    device::lbs_scale_launcher(*this);
     cuda(Memset(device.warp_dist_map, -1, warp_dist_map_size));
     device::lbs_transform_kernel<<<leaf_blocks, N_CUDA_THREADS>>>(*this);
     device::warp_dist_prop_kernel<<<warp_3d_blocks, N_CUDA_THREADS>>>(*this);
@@ -308,7 +378,9 @@ void N3Tree::free_cuda() {
     if (device.data != nullptr) cuda(Free(device.data));
     if (device.child != nullptr) cuda(Free(device.child));
     if (device.offset != nullptr) cuda(Free(device.offset));
+    if (device.offset_pose != nullptr) cuda(Free(device.offset_pose));
     if (device.scale != nullptr) cuda(Free(device.scale));
+    if (device.scale_pose != nullptr) cuda(Free(device.scale_pose));
     if (device.extra != nullptr) cuda(Free(device.extra));
 
     if (device.lbs_weight_start != nullptr) cuda(Free(device.lbs_weight_start));

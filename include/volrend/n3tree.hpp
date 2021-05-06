@@ -38,7 +38,7 @@ struct _LBSWeightItem {
 
 struct _WarpGridItem {
     __half transform[12];
-    __half max_sigma;
+    float max_sigma;
 };
 
 // Read-only N3Tree loader
@@ -77,10 +77,14 @@ struct N3Tree {
     int n_verts;
     // **
 
-    // Scaling for coordinates
-    std::array<float, 3> scale;
     // Translation
     std::array<float, 3> offset;
+    // Translation for current posed space
+    mutable std::array<float, 3> offset_pose;
+    // Scaling for coordinates
+    std::array<float, 3> scale;
+    // Scaling for current posed space
+    mutable std::array<float, 3> scale_pose;
 
     // Axis-angle pose at each joint, set by user (only used if rigged)
     std::vector<glm::vec3> pose;
@@ -115,7 +119,9 @@ struct N3Tree {
         __half* data = nullptr;
         int32_t* child = nullptr;
         float* offset = nullptr;
+        float* offset_pose = nullptr;
         float* scale = nullptr;
+        float* scale_pose = nullptr;
         float* extra = nullptr;
 
         // BBOX and scale at each leaf

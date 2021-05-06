@@ -72,7 +72,7 @@ __device__ __inline__ void trace_ray(
         scalar_t* __restrict__ out) {
 
     const float delta_scale = _get_delta_scale(
-            tree.scale, /*modifies*/ dir);
+            tree.scale_pose, /*modifies*/ dir);
     tmax_bg /= delta_scale;
 
     scalar_t tmin, tmax;
@@ -83,8 +83,8 @@ __device__ __inline__ void trace_ray(
     }
     float cen_local[3], dir_world[3];
     for (int i = 0; i < 3; ++i) {
-        cen_local[i] = tree.offset[i] + tree.scale[i] * cen[i];
-        dir_world[i] = dir[i] / tree.scale[i];
+        cen_local[i] = tree.offset_pose[i] + tree.scale_pose[i] * cen[i];
+        dir_world[i] = dir[i] / tree.scale_pose[i];
     }
     _dda_world(cen_local, invdir, &tmin, &tmax, opt.render_bbox);
     tmax = min(tmax, tmax_bg);
@@ -151,7 +151,7 @@ __device__ __inline__ void trace_ray(
                         __half2float(m[9 + j]);
                     pos[j] = tree.offset[j] + tree.scale[j] * pos[j];
                 }
-                sigma = __half2float(warp.max_sigma);
+                sigma = warp.max_sigma;
             }
 
             // Now pos is the position in canonical space, query the octree

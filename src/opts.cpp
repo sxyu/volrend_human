@@ -18,7 +18,7 @@ void add_common_opts(cxxopts::Options& options) {
             cxxopts::value<float>()->default_value("-1.0"))
         ("bg", "background brightness 0-1", cxxopts::value<float>()->default_value("1.0"))
         ("s,step_size", "step size epsilon added to computed cube size",
-             cxxopts::value<float>()->default_value("5e-4"))
+             cxxopts::value<float>()->default_value("1e-3"))
         ("e,stop_thresh", "early stopping threshold (on remaining intensity)",
              cxxopts::value<float>()->default_value("1e-2"))
         ("a,sigma_thresh", "sigma threshold (skip cells with < sigma)",

@@ -1,8 +1,6 @@
 #include "volrend/n3tree.hpp"
 #include "volrend/data_format.hpp"
 
-#include "volrend/cuda/common.cuh"
-
 #include <cassert>
 #include <cstring>
 #include <cstdlib>

@@ -26,7 +26,9 @@ struct TreeSpec {
     __half* VOLREND_RESTRICT const data;
     const int32_t* VOLREND_RESTRICT const child;
     const float* VOLREND_RESTRICT const offset;
+    float* VOLREND_RESTRICT const offset_pose;
     const float* VOLREND_RESTRICT const scale;
+    float* VOLREND_RESTRICT const scale_pose;
     const float* VOLREND_RESTRICT const extra;
     const _BBoxItem* VOLREND_RESTRICT const bbox;
     const uint64_t* VOLREND_RESTRICT const inv_ptr;
@@ -50,7 +52,9 @@ struct TreeSpec {
         data(cpu ? tree.data_.data<__half>() : tree.device.data),
         child(cpu ? tree.child_.data<int32_t>() : tree.device.child),
         offset(cpu ? tree.offset.data() : tree.device.offset),
+        offset_pose(cpu ? tree.offset_pose.data() : tree.device.offset_pose),
         scale(cpu ? tree.scale.data() : tree.device.scale),
+        scale_pose(cpu ? tree.scale_pose.data() : tree.device.scale_pose),
         extra(cpu ? tree.extra_.data<float>() : tree.device.extra),
         bbox(cpu ? tree.bbox_.data() : tree.device.bbox),
         inv_ptr(cpu ? tree.inv_ptr_.data() : tree.device.inv_ptr),

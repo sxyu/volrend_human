@@ -206,7 +206,8 @@ void glfw_mouse_button_callback(GLFWwindow* window, int button, int action,
             glm::mat4 VP = camera_persp_prj * w2c;
             glm::vec2 mouse(x, y);
 
-            const float SELECT_SCREEN_THRESH = 15.f / 800.f * cam.width;
+            const float SELECT_SCREEN_THRESH =
+                (rend.options.show_joints ? 5.f : 15.f) / 800.f * cam.width;
 
             float min_z = 1e9f;
             int min_joint = -1;
@@ -333,8 +334,6 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
 
     ImGuizmo::BeginFrame();
 
-    float viewManipulateRight = io.DisplaySize.x;
-    float viewManipulateTop = 0;
     ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
     glm::mat4 w2c = glm::affineInverse(glm::mat4(cam.transform));
 
@@ -576,9 +575,8 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
             } else if (rend.options.selected_joint == -2) {
                 sel_joint_name = "";
             }
-            static bool show_joints = false;
-            ImGui::Checkbox("show joints", &show_joints);
-            if (show_joints) {
+            ImGui::Checkbox("show joints", &rend.options.show_joints);
+            if (rend.options.show_joints) {
                 for (int j = 0; j < tree.n_joints; ++j) {
                     ImGuizmo::DrawCubes(glm::value_ptr(w2c),
                                         glm::value_ptr(camera_persp_prj),
@@ -622,8 +620,8 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                         "trans##rig", glm::value_ptr(tree.trans), -1.f, 1.f)) {
                     manip_updated = true;
                 }
-                static glm::mat4 trans =
-                    glm::translate(glm::mat4(1.f), tree.trans);
+                static glm::mat4 trans = glm::mat4(1.f);
+                trans = glm::translate(glm::mat4(1.f), tree.trans);
                 if (ImGuizmo::Manipulate(
                         glm::value_ptr(w2c), glm::value_ptr(camera_persp_prj),
                         ImGuizmo::TRANSLATE, ImGuizmo::LOCAL,
@@ -677,7 +675,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                                     glm::value_ptr(camera_persp_prj),
                                     ImGuizmo::ROTATE, ImGuizmo::LOCAL,
                                     glm::value_ptr(tree.pose_mats[i]), NULL,
-                                    NULL, NULL, NULL)) {
+                                    NULL, NULL, NULL, joint_names[i].c_str())) {
                                 glm::mat3 rot = glm::mat3(tree.pose_mats[i]);
                                 if (i) {
                                     rot = glm::transpose(glm::mat3(

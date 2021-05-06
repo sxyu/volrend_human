@@ -161,6 +161,23 @@ __host__ __device__ __inline__ void inv_morton_code_3(uint32_t code,
     *z = _unexpand_bits(code);
 }
 
+#ifdef __CUDACC__
+__device__ __inline__ float atomicMinf(float* addr, float value) {
+    float old;
+    old = (value >= 0) ? __int_as_float(atomicMin((int *)addr, __float_as_int(value))) :
+        __uint_as_float(atomicMax((unsigned int *)addr, __float_as_uint(value)));
+
+    return old;
+}
+__device__ __inline__ float atomicMaxf(float* addr, float value) {
+    float old;
+    old = (value >= 0) ? __int_as_float(atomicMax((int *)addr, __float_as_int(value))) :
+        __uint_as_float(atomicMin((unsigned int *)addr, __float_as_uint(value)));
+
+    return old;
+}
+#endif
+
 namespace volrend {
 
 // Beware that NVCC doesn't work with C files and __VA_ARGS__

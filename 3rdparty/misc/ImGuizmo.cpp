@@ -1276,7 +1276,7 @@ static float ComputeAngleOnPlan() {
     return angle;
 }
 
-static void DrawRotationGizmo(OPERATION op, int type) {
+static void DrawRotationGizmo(OPERATION op, int type, const char* ttip = "") {
     if (!Intersects(op, ROTATE)) {
         return;
     }
@@ -1377,6 +1377,14 @@ static void DrawRotationGizmo(OPERATION op, int type) {
         drawList->AddText(ImVec2(destinationPosOnScreen.x + 14,
                                  destinationPosOnScreen.y + 14),
                           0xFFFFFFFF, tmps);
+        if (ttip[0] != 0) {
+            drawList->AddText(ImVec2(destinationPosOnScreen.x + 15,
+                                     destinationPosOnScreen.y + 28),
+                              0xFF000000, ttip);
+            drawList->AddText(ImVec2(destinationPosOnScreen.x + 14,
+                                     destinationPosOnScreen.y + 28),
+                              0xFFFFFFFF, ttip);
+        }
     }
 }
 
@@ -2470,7 +2478,8 @@ void AllowAxisFlip(bool value) { gContext.mAllowAxisFlip = value; }
 
 bool Manipulate(const float* view, const float* projection, OPERATION operation,
                 MODE mode, float* matrix, float* deltaMatrix, const float* snap,
-                const float* localBounds, const float* boundsSnap) {
+                const float* localBounds, const float* boundsSnap,
+                const char* ttip) {
     ComputeContext(view, projection, matrix, mode);
 
     // set delta to identity
@@ -2504,7 +2513,7 @@ bool Manipulate(const float* view, const float* projection, OPERATION operation,
 
     gContext.mOperation = operation;
     if (!gContext.mbUsingBounds) {
-        DrawRotationGizmo(operation, type);
+        DrawRotationGizmo(operation, type, ttip);
         DrawTranslationGizmo(operation, type);
         DrawScaleGizmo(operation, type);
     }
@@ -2583,7 +2592,7 @@ void DrawCubes(const float* view, const float* projection,
             const int perpYIndex = (normalIndex + 2) % 3;
             const float invert = (iFace > 2) ? -1.f : 1.f;
 
-            const float cubeScale = 0.05f;
+            const float cubeScale = 0.025f;
             vec_t faceCoords[4] = {
                 directionUnary[normalIndex] + directionUnary[perpXIndex] +
                     directionUnary[perpYIndex],
