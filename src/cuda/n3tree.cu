@@ -145,10 +145,6 @@ __global__ void lbs_transform_kernel(TreeSpec tree) {
                 coords[1] = floorf(targ_pos[1] * N3_WARP_GRID_SIZE);
                 coords[2] = floorf(targ_pos[2] * N3_WARP_GRID_SIZE);
 
-                // TODO: bounds right now are same as rest pose bounds.
-                // If you move the human too much parts of the body will disappear,
-                // due to going out of bounds.
-                // Ideally the bounds should be auto-updated with each kintree update.
                 if (coords[0] < 0 || coords[1] < 0 || coords[2] < 0 ||
                         coords[0] >= N3_WARP_GRID_SIZE || coords[1] >= N3_WARP_GRID_SIZE ||
                         coords[2] >= N3_WARP_GRID_SIZE) {
