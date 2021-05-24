@@ -578,7 +578,7 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
         if (ImGui::CollapsingHeader("Rigging")) {
             if (ImGui::Button("reset##rig-reset")) {
                 tree.trans = glm::vec3(0);
-                std::fill(tree.pose.begin(), tree.pose.end(), glm::vec3(0));
+                tree.pose = tree.pose_canon;
                 tree.update_kintree();
             }
             ImGui::SameLine();
@@ -592,13 +592,20 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
             }
             static std::string sel_joint_name = "";
             if (rend.options.selected_joint >= 0) {
-                sel_joint_name = joint_names[rend.options.selected_joint];
+                if (joint_names[rend.options.selected_joint].size() &&
+                    joint_names[rend.options.selected_joint][0] == '_') {
+                    sel_joint_name = "";
+                } else {
+                    sel_joint_name = joint_names[rend.options.selected_joint];
+                }
             } else if (rend.options.selected_joint == -2) {
                 sel_joint_name = "";
             }
             ImGui::Checkbox("show joints", &rend.options.show_joints);
             if (rend.options.show_joints) {
                 for (int j = 0; j < tree.n_joints; ++j) {
+                    if (joint_names[j].size() && joint_names[j][0] == '_')
+                        continue;
                     ImGuizmo::DrawCubes(glm::value_ptr(w2c),
                                         glm::value_ptr(camera_persp_prj),
                                         glm::value_ptr(tree.pose_mats[j]), 1);
@@ -653,68 +660,51 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                 ImGui::TreePop();
             }
             const int STEP = 10;
-            for (int j = 0; j < tree.n_joints; j += STEP) {
-                int end_idx = std::min(j + STEP, tree.n_joints);
-                std::string all_joint_names;
-                for (int i = j; i < std::min(j + 2, tree.n_joints); ++i) {
-                    const std::string& joint_name = joint_names[i];
-                    if (i > j) all_joint_names.push_back(' ');
-                    for (char c : joint_name) {
-                        if (c != '_') all_joint_names.push_back(c);
-                    }
+            static std::vector<glm::mat4> pose_mats;
+            pose_mats.resize(tree.n_joints);
+            for (int i = 0; i < tree.n_joints; ++i) {
+                const std::string id = std::to_string(i);
+                std::string joint_name = joint_names[i];
+                if (joint_name.size() && joint_name[0] == '_') {
+                    // Hidden joint
+                    continue;
                 }
-                all_joint_names.append("..");
-                if (rend.options.selected_joint >= j &&
-                    rend.options.selected_joint < end_idx) {
+                joint_name += "##rig_" + id;
+                if (rend.options.selected_joint == i) {
                     ImGui::SetNextTreeNodeOpen(true);
+                } else if (~rend.options.selected_joint) {
+                    ImGui::SetNextTreeNodeOpen(false);
                 }
-                if (ImGui::TreeNode((std::to_string(j) + "-" +
-                                     std::to_string(end_idx - 1) + ": " +
-                                     all_joint_names)
-                                        .c_str())) {
-                    for (int i = j; i < end_idx; ++i) {
-                        const std::string id = std::to_string(i);
-                        std::string joint_name = joint_names[i];
-                        joint_name += "##rig_" + id;
-                        if (rend.options.selected_joint == i) {
-                            ImGui::SetNextTreeNodeOpen(true);
-                        } else if (~rend.options.selected_joint) {
-                            ImGui::SetNextTreeNodeOpen(false);
-                        }
-                        if (ImGui::TreeNode(joint_name.c_str())) {
-                            std::string slider_id = "axisangle##rig_sli_" + id;
-                            if (ImGui::SliderFloat3(
-                                    slider_id.c_str(),
-                                    glm::value_ptr(tree.pose[i]), -M_PI / 2,
-                                    M_PI / 2)) {
-                                manip_updated = true;
-                            }
+                // Correctly handle the vitruvian
+                pose_mats[i] = tree.pose_mats[i] *
+                               glm::mat4(glm::transpose(tree.pose_canon_r[i]));
+                if (ImGui::TreeNode(joint_name.c_str())) {
+                    std::string slider_id = "axisangle##rig_sli_" + id;
+                    if (ImGui::SliderFloat3(slider_id.c_str(),
+                                            glm::value_ptr(tree.pose[i]),
+                                            -M_PI / 2, M_PI / 2)) {
+                        manip_updated = true;
+                    }
 
-                            ImGuizmo::SetID(i);
-                            if (ImGuizmo::Manipulate(
-                                    glm::value_ptr(w2c),
-                                    glm::value_ptr(camera_persp_prj),
-                                    ImGuizmo::ROTATE, ImGuizmo::LOCAL,
-                                    glm::value_ptr(tree.pose_mats[i]), NULL,
-                                    NULL, NULL, NULL, joint_names[i].c_str())) {
-                                glm::mat3 rot = glm::mat3(tree.pose_mats[i]);
-                                if (i) {
-                                    rot = glm::transpose(glm::mat3(
-                                              tree.pose_mats
-                                                  [tree.kintree_table_[i]])) *
-                                          rot;
-                                }
-                                glm::quat rot_q = glm::quat_cast(rot);
-                                tree.pose[i] =
-                                    glm::axis(rot_q) * glm::angle(rot_q);
-                                manip_updated = true;
-                            }
-                            ImGui::TreePop();
+                    ImGuizmo::SetID(i);
+                    if (ImGuizmo::Manipulate(
+                            glm::value_ptr(w2c),
+                            glm::value_ptr(camera_persp_prj), ImGuizmo::ROTATE,
+                            ImGuizmo::LOCAL, glm::value_ptr(pose_mats[i]), NULL,
+                            NULL, NULL, NULL, joint_names[i].c_str())) {
+                        glm::mat3 rot = glm::mat3(pose_mats[i]);
+                        if (i) {
+                            rot = glm::transpose(glm::mat3(
+                                      pose_mats[tree.kintree_table_[i]])) *
+                                  rot;
                         }
-                    }  // for i
+                        glm::quat rot_q = glm::quat_cast(rot);
+                        tree.pose[i] = glm::axis(rot_q) * glm::angle(rot_q);
+                        manip_updated = true;
+                    }
                     ImGui::TreePop();
-                }  // TreeNode Axis-angle
-            }      // for j
+                }
+            }  // for i
             if (manip_updated) {
                 tree.update_kintree();
             }
@@ -976,8 +966,18 @@ int main(int argc, char* argv[]) {
     bool init_loaded = false;
     if (args.count("file")) {
         init_loaded = true;
-        tree.open(args["file"].as<std::string>(),
-                  args["rig"].as<std::string>());
+        tree.open(args["file"].as<std::string>(), args["rig"].as<std::string>(),
+                  args["weights"].as<std::string>());
+        if (tree.is_rigged()) {
+            if (args.count("canon"))
+                tree.load_canon(args["canon"].as<std::string>());
+            if (args.count("pose")) {
+                tree.load_pose(args["pose"].as<std::string>());
+            } else {
+                tree.pose = tree.pose_canon;
+            }
+            tree.update_kintree();
+        }
     }
     int width = args["width"].as<int>(), height = args["height"].as<int>();
     float fx = args["fx"].as<float>();
@@ -996,7 +996,7 @@ int main(int argc, char* argv[]) {
             }
         }
         for (int i = joint_names.size(); i < tree.n_joints; ++i) {
-            joint_names.push_back("_JOINT_" + std::to_string(i));
+            joint_names.push_back("JOINT_" + std::to_string(i));
         }
     }
 

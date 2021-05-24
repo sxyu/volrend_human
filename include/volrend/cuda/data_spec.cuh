@@ -45,7 +45,6 @@ struct TreeSpec {
     const float ndc_height;
     const float ndc_focal;
     const int n_leaves_compr;
-    const int n_verts;
     const int n_joints;
 
     TreeSpec(const N3Tree& tree, bool cpu=false) :
@@ -71,7 +70,6 @@ struct TreeSpec {
         ndc_height(tree.ndc_height),
         ndc_focal(tree.ndc_focal),
         n_leaves_compr(tree.inv_ptr_.size()),
-        n_verts(tree.n_verts),
         n_joints(tree.n_joints) { }
 };
 

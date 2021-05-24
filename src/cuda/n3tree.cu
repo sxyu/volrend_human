@@ -126,7 +126,7 @@ __global__ void lbs_transform_kernel(TreeSpec tree) {
     int coords[3];
     float src_pos[3];
     float targ_pos[3];
-    constexpr int HALF_N_POINTS = 1;
+    constexpr int HALF_N_POINTS = 0;
     const _BBoxItem& __restrict__ bbox = tree.bbox[idx];
     float dx = tree.bbox[idx].size * (1.f / (tree.scale[0] * (HALF_N_POINTS + 1)));
     float dy = tree.bbox[idx].size * (1.f / (tree.scale[1] * (HALF_N_POINTS + 1)));

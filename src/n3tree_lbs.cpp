@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <atomic>
 #include <thread>
+#include "cnpy.h"
 
 #include "glm/geometric.hpp"
 #include "glm/gtc/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
 #include "glm/mat3x3.hpp"
 #include <nanoflann.hpp>
 
@@ -46,6 +48,7 @@ struct KdTreePointsAdaptor {
     const unsigned int n_pts_;
 };
 
+// Compute LBS weights from mesh surface using nearest-neighbors
 void _nn_weights_cpu(const std::vector<_BBoxItem>& bbox,
                      const cnpy::NpyArray& v_template,
                      const cnpy::NpyArray& weights,
@@ -100,6 +103,31 @@ void _nn_weights_cpu(const std::vector<_BBoxItem>& bbox,
         lbs_weight_start_out.back() = lbs_weight_out.size();
     }
 }
+
+// Load LBS weights from --weights file
+void _copy_sparse_weights_cpu(const std::vector<uint64_t>& inv_ptr,
+                              const cnpy::NpyArray& valid_joint_ids,
+                              const cnpy::NpyArray& weights,
+                              std::vector<uint32_t>& lbs_weight_start_out,
+                              std::vector<_LBSWeightItem>& lbs_weight_out) {
+    const size_t n_points = inv_ptr.size();
+    const int n_valid_joints = valid_joint_ids.shape[0];
+    const __half* weights_ptr = weights.data<__half>();
+    const int64_t* valid_joint_map = valid_joint_ids.data<int64_t>();
+    lbs_weight_out.reserve(n_points * 0.04f);
+    lbs_weight_start_out.resize(n_points + 1);
+    for (uint32_t i = 0; i < n_points; ++i) {
+        const __half* in_weights = weights_ptr + inv_ptr[i] * n_valid_joints;
+        lbs_weight_start_out[i] = (uint32_t)lbs_weight_out.size();
+        for (int j = 0; j < n_valid_joints; ++j) {
+            if (in_weights[j] > 1e-6f) {
+                lbs_weight_out.push_back(_LBSWeightItem{
+                    (uint16_t)valid_joint_map[j], in_weights[j]});
+            }
+        }
+    }
+    lbs_weight_start_out.back() = lbs_weight_out.size();
+}
 }  // namespace
 
 void N3Tree::update_kintree() {
@@ -115,6 +143,13 @@ void N3Tree::update_kintree() {
         }
     }
 
+    if (pose_canon_l.size()) {
+        for (size_t i = 0; i < pose.size(); ++i) {
+            pose_mats[i] = glm::mat4(pose_canon_l[i]) * pose_mats[i] *
+                           glm::mat4(pose_canon_r[i]);
+        }
+    }
+
     pose_mats[0][3] = glm::vec4(joint_pos_[0] + trans, 1.f);
     for (size_t i = 1; i < pose.size(); ++i) {
         pose_mats[i][3] =
@@ -123,6 +158,7 @@ void N3Tree::update_kintree() {
             pose_mats[i] = pose_mats[kintree_table_[i]] * pose_mats[i];
         }
     }
+
     joint_pos_posed_.resize(n_joints);
     this->pose_mats = pose_mats;
     for (size_t i = 0; i < pose.size(); ++i) {
@@ -144,7 +180,9 @@ void N3Tree::update_kintree() {
 #endif
 }
 
-void N3Tree::load_rig_npz(cnpy::npz_t& npz) {
+void N3Tree::load_rig_npz(cnpy::npz_t& npz, cnpy::npz_t& weights_npz) {
+    bool use_given_lbs_weights =
+        weights_npz.count("weights") && weights_npz.count("valid_joint_ids");
     {
         const auto& kt_node = npz["kintree_table"];
         n_joints = kt_node.shape[1];
@@ -167,34 +205,121 @@ void N3Tree::load_rig_npz(cnpy::npz_t& npz) {
         }
         const float* jnt_ptr = jnt_node.data<float>();
         joint_pos_.resize(n_joints);
+        joint_pos_on_load_.resize(n_joints);
         for (int i = 0; i < n_joints; ++i) {
             const float* jnti_ptr = jnt_ptr + i * 3;
             joint_pos_[i] = glm::vec3(jnti_ptr[0], jnti_ptr[1], jnti_ptr[2]);
+            joint_pos_on_load_[i] = joint_pos_[i];
         }
-    }
-    {
-        auto& vt_node = npz["v_template"];
-        n_verts = vt_node.shape[0];
-        if (vt_node.shape[1] != 3 || vt_node.word_size != 4) {
-            std::cerr << "RIG LOAD ERROR: Invalid model v_template\n";
-        }
-        std::swap(v_template_, vt_node);
-    }
-    {
-        auto& wt_node = npz["weights"];
-        if (wt_node.shape[0] != n_verts || wt_node.shape[1] != n_joints ||
-            wt_node.word_size != 4) {
-            std::cerr << "RIG LOAD ERROR: Invalid model weights\n";
-        }
-        std::swap(weights_, wt_node);
     }
     pose.resize(n_joints);
+    pose_canon.resize(n_joints);
     trans = glm::vec3(0);
     std::fill(pose.begin(), pose.end(), glm::vec3(0));
+    std::fill(pose_canon.begin(), pose_canon.end(), glm::vec3(0));
 
     gen_bbox();
-    _nn_weights_cpu(bbox_, v_template_, weights_, lbs_weight_start_,
-                    lbs_weight_);
+    if (use_given_lbs_weights) {
+        auto& valid_joint_ids = weights_npz["valid_joint_ids"];
+        const int n_valid_joints = valid_joint_ids.shape[0];
+        if (valid_joint_ids.shape.size() != 1 ||
+            valid_joint_ids.word_size != 8) {
+            std::cerr << "rig weight load error: invalid valid_joint_ids\n";
+            std::exit(1);
+        }
+
+        auto& weights = weights_npz["weights"];
+        if (weights.shape.size() != 5 || weights.shape[0] != capacity ||
+            weights.shape[1] != N || weights.shape[2] != N ||
+            weights.shape[3] != N || weights.shape[4] != n_valid_joints ||
+            weights.word_size != 2) {
+            std::cerr << "rig weight load error: invalid lbs weights\n";
+            std::exit(1);
+        }
+
+        _copy_sparse_weights_cpu(inv_ptr_, valid_joint_ids, weights,
+                                 lbs_weight_start_, lbs_weight_);
+    } else {
+        std::cerr
+            << "WARNING: using automatic nearest-neighbor weights from "
+               "mesh surface, did you specify the correct --weights file?\n";
+        auto& v_template = npz["v_template"];
+        int n_verts = v_template.shape[0];
+        if (v_template.shape[1] != 3 || v_template.word_size != 4) {
+            std::cerr << "rig load error: invalid model v_template\n";
+            std::exit(1);
+        }
+        auto& weights = npz["weights"];
+        if (weights.shape[0] != n_verts || weights.shape[1] != n_joints ||
+            weights.word_size != 4) {
+            std::cerr << "rig load error: invalid model weights\n";
+            std::exit(1);
+        }
+        _nn_weights_cpu(bbox_, v_template, weights, lbs_weight_start_,
+                        lbs_weight_);
+    }
+}
+
+void N3Tree::load_canon(const std::string& path) {
+    if (!std::ifstream(path)) {
+        std::cerr << "canon load error: file could not be opened\n";
+        std::exit(1);
+    }
+    cnpy::npz_t npz = cnpy::npz_load(path);
+    if (npz.count("left") == 0 || npz.count("right") == 0) {
+        std::cerr << "canon load error: left/right array not present\n";
+        std::exit(1);
+    }
+
+    auto& left = npz["left"];
+    auto& right = npz["right"];
+    if (left.shape.size() != 3 || right.shape.size() != 3 ||
+        left.shape[0] != n_joints || right.shape[0] != n_joints ||
+        left.shape[1] != 3 || right.shape[1] != 3 || left.shape[2] != 3 ||
+        right.shape[2] != 3 || left.word_size != 4 || right.word_size != 4) {
+        std::cerr << "canon load error: invalid left or right array, "
+                     "must be type float32, size [n_joints, 3, 3].\n";
+        std::exit(1);
+    }
+
+    pose_canon_l.resize(n_joints);
+    pose_canon_r.resize(n_joints);
+    const float* left_ptr = left.data<float>();
+    const float* right_ptr = right.data<float>();
+    for (int i = 0; i < n_joints; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 3; ++k) {
+                pose_canon_l[i][k][j] = left_ptr[j * 3 + k];
+                pose_canon_r[i][k][j] = right_ptr[j * 3 + k];
+            }
+        }
+        left_ptr += 9;
+        right_ptr += 9;
+
+        uint32_t p = kintree_table_[i];
+        if (~p) {
+            joint_pos_[i] =
+                glm::transpose(pose_canon_r[i]) *
+                    (joint_pos_on_load_[i] - joint_pos_on_load_[p]) +
+                joint_pos_[p];
+        }
+        glm::quat rot_q =
+            glm::quat_cast(glm::transpose(pose_canon_l[i] * pose_canon_r[i]));
+        pose_canon[i] = glm::axis(rot_q) * glm::angle(rot_q);
+    }
+}
+
+void N3Tree::load_pose(const std::string& path) {
+    if (!std::ifstream(path)) {
+        std::cerr << "pose load error: file could not be opened\n";
+        std::exit(1);
+    }
+    std::ifstream pose_ifs(path);
+    for (int i = 0; i < pose.size(); ++i) {
+        for (int j = 0; j < 3; ++j) {
+            pose_ifs >> pose[i][j];
+        }
+    }
 }
 
 namespace {

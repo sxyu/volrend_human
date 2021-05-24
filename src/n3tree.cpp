@@ -98,8 +98,9 @@ std::string DataFormat::to_string() const {
 }
 
 N3Tree::N3Tree() {}
-N3Tree::N3Tree(const std::string& path, const std::string& rig_path) {
-    open(path, rig_path);
+N3Tree::N3Tree(const std::string& path, const std::string& rig_path,
+               const std::string& weights_path) {
+    open(path, rig_path, weights_path);
 }
 N3Tree::~N3Tree() {
 #ifdef VOLREND_CUDA
@@ -107,7 +108,8 @@ N3Tree::~N3Tree() {
 #endif
 }
 
-void N3Tree::open(const std::string& path, const std::string& rig_path) {
+void N3Tree::open(const std::string& path, const std::string& rig_path,
+                  const std::string& weights_path) {
     clear_cpu_memory();
 
     data_loaded_ = false;
@@ -147,12 +149,28 @@ void N3Tree::open(const std::string& path, const std::string& rig_path) {
     }
 
     rig_path_ = rig_path;
-    bool use_lbs = rig_path_.size() && bool(std::ifstream(rig_path_));
+    weights_path_ = weights_path;
+    bool use_lbs = rig_path_.size();
+    bool use_lbs_weights = weights_path.size();
     if (use_lbs) {
-        std::cerr << "INFO: Use model.npz for rigging info: " << rig_path_
-                  << "\n";
+        if (!std::ifstream(rig_path_)) {
+            std::cerr << "--rig file '" << rig_path_ << "' cannot be opened\n";
+            std::exit(1);
+        }
+        std::cerr << "INFO: Use skeleton info from: " << rig_path_ << "\n";
         cnpy::npz_t rig_npz = cnpy::npz_load(rig_path_);
-        load_rig_npz(rig_npz);
+        cnpy::npz_t weights_npz;
+        if (use_lbs_weights) {
+            if (!std::ifstream(weights_path_)) {
+                std::cerr << "--weights file '" << weights_path_
+                          << "' cannot be opened\n";
+                std::exit(1);
+            }
+            std::cerr << "INFO: Use lbs weights from: " << weights_path_
+                      << "\n";
+            weights_npz = cnpy::npz_load(weights_path_);
+        }
+        load_rig_npz(rig_npz, weights_npz);
     } else {
         n_joints = 0;
     }
@@ -166,7 +184,8 @@ void N3Tree::open(const std::string& path, const std::string& rig_path) {
 }
 
 void N3Tree::open_mem(const char* data, uint64_t size, const char* rig_data,
-                      uint64_t rig_size) {
+                      uint64_t rig_size, const char* weights_data,
+                      uint64_t weights_size) {
     data_loaded_ = false;
 #ifdef VOLREND_CUDA
     cuda_loaded_ = false;
@@ -182,7 +201,11 @@ void N3Tree::open_mem(const char* data, uint64_t size, const char* rig_data,
 
     if (rig_data) {
         cnpy::npz_t rig_npz = cnpy::npz_load_mem(rig_data, rig_size);
-        load_rig_npz(rig_npz);
+        cnpy::npz_t weights_npz;
+        if (weights_data) {
+            weights_npz = cnpy::npz_load_mem(weights_data, weights_size);
+        }
+        load_rig_npz(rig_npz, weights_npz);
     }
 
     last_sigma_thresh_ = -1.f;

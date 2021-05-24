@@ -95,8 +95,6 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<float>()->default_value("1.0"))
         ("max_imgs", "max images to render, default no limit",
                 cxxopts::value<int>()->default_value("0"))
-        ("pose", "path to pose file",
-                cxxopts::value<std::string>()->default_value(""))
         ;
     // clang-format on
 
@@ -151,14 +149,15 @@ int main(int argc, char *argv[]) {
     }
     std::string out_dir = args["write_images"].as<std::string>();
 
-    N3Tree tree(args["file"].as<std::string>(), args["rig"].as<std::string>());
-    if (tree.is_rigged() && args.count("pose")) {
-        std::string pose_file = args["pose"].as<std::string>();
-        std::ifstream pose_ifs(pose_file);
-        for (int i = 0; i < tree.pose.size(); ++i) {
-            for (int j = 0; j < 3; ++j) {
-                pose_ifs >> tree.pose[i][j];
-            }
+    N3Tree tree(args["file"].as<std::string>(), args["rig"].as<std::string>(),
+                args["weights"].as<std::string>());
+    if (tree.is_rigged()) {
+        if (args.count("canon"))
+            tree.load_canon(args["canon"].as<std::string>());
+        if (args.count("pose")) {
+            tree.load_pose(args["pose"].as<std::string>());
+        } else {
+            tree.pose = tree.pose_canon;
         }
         tree.update_kintree();
     }

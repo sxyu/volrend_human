@@ -44,14 +44,30 @@ struct _WarpGridItem {
 // Read-only N3Tree loader
 struct N3Tree {
     N3Tree();
-    explicit N3Tree(const std::string& path, const std::string& rig_path = "");
+    explicit N3Tree(const std::string& path, const std::string& rig_path = "",
+                    const std::string& weights_path = "");
     ~N3Tree();
 
     // Open npz
-    void open(const std::string& path, const std::string& rig_path = "");
+    void open(const std::string& path, const std::string& rig_path = "",
+              const std::string& weights_path = "");
     // Open memory data stream (for web mostly)
+    // FIXME: not synced with LBS related changes
     void open_mem(const char* data, uint64_t size,
-                  const char* rig_data = nullptr, uint64_t rig_size = 0);
+                  const char* rig_data = nullptr, uint64_t rig_size = 0,
+                  const char* weights_data = nullptr,
+                  uint64_t weights_size = 0);
+
+    // Load canonical pose (e.g. vitruvian) config npz
+    // should have two arrays: left and right, each n_joints x 3 x 3
+    // all pose rotation matrices will be modified
+    // pose' = left * pose * right
+    void load_canon(const std::string& path);
+
+    // Load (current) pose text file
+    // file should be n_joints x 3 space and newline separated text matrix
+    // where each row is an axis-angle rotation
+    void load_pose(const std::string& path);
 
     // KinTree propagation
     void update_kintree();
@@ -73,8 +89,6 @@ struct N3Tree {
     // ** LBS/Skeleton
     // Number of joints
     int n_joints;
-    // Number of vertices
-    int n_verts;
     // **
 
     // Translation
@@ -88,7 +102,14 @@ struct N3Tree {
 
     // Axis-angle pose at each joint, set by user (only used if rigged)
     std::vector<glm::vec3> pose;
+    // Pose as transform matrices (computed)
     std::vector<glm::mat4> pose_mats;
+
+    // 'Vitruvian' or alt canonical pose config
+    std::vector<glm::vec3> pose_canon;
+    std::vector<glm::mat3> pose_canon_r;
+    std::vector<glm::mat3> pose_canon_l;
+
     // Root translation
     glm::vec3 trans;
 
@@ -149,14 +170,11 @@ struct N3Tree {
     cnpy::NpyArray extra_;
 
     // ** LBS / Skeleton
-    // LBS weight data holder (SMPL weights)
-    cnpy::NpyArray weights_;
-
-    // Joints positions at rest (SMPL J)
+    // Joints positions at rest, after change of canon was applied
     std::vector<glm::vec3> joint_pos_;
 
-    // Vertex positions (SMPL v_template)
-    cnpy::NpyArray v_template_;
+    // Joints positions at rest, upon loading (SMPL J)
+    std::vector<glm::vec3> joint_pos_on_load_;
 
     // Kinectic tree parents (SMPL kintree_table; only nonempty if rigged)
     std::vector<uint32_t> kintree_table_;
@@ -169,20 +187,24 @@ struct N3Tree {
     // Pointer to data (/data_dim) for given compressed leaf index (L)
     std::vector<uint64_t> inv_ptr_;
 
+    // Manual sparse matrix storing LBS weights
     std::vector<uint32_t> lbs_weight_start_;
     std::vector<_LBSWeightItem> lbs_weight_;
+
+    // Posed joints
     std::vector<glm::vec3> joint_pos_posed_;
+    // Joint LBS transforms, vec(n_joints * 12)
     mutable std::vector<float> joint_transform_;
 
     int N2_, N3_;
 
    private:
     void load_npz(cnpy::npz_t& npz);
-    void load_rig_npz(cnpy::npz_t& npz);
+    void load_rig_npz(cnpy::npz_t& npz, cnpy::npz_t& weights_npz);
     void gen_bbox();
 
     // Paths
-    std::string npz_path_, rig_path_, poses_bounds_path_;
+    std::string npz_path_, rig_path_, weights_path_, poses_bounds_path_;
     bool data_loaded_;
 
     mutable float last_sigma_thresh_;
