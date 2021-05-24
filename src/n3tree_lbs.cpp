@@ -298,10 +298,9 @@ void N3Tree::load_canon(const std::string& path) {
 
         uint32_t p = kintree_table_[i];
         if (~p) {
-            joint_pos_[i] =
-                glm::transpose(pose_canon_r[i]) *
-                    (joint_pos_on_load_[i] - joint_pos_on_load_[p]) +
-                joint_pos_[p];
+            joint_pos_[i] = pose_canon_l[i] * (joint_pos_on_load_[i] -
+                                               joint_pos_on_load_[p]) +
+                            joint_pos_[p];
         }
         glm::quat rot_q =
             glm::quat_cast(glm::transpose(pose_canon_l[i] * pose_canon_r[i]));

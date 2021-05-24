@@ -676,8 +676,11 @@ void draw_imgui(VolumeRenderer& rend, N3Tree& tree,
                     ImGui::SetNextTreeNodeOpen(false);
                 }
                 // Correctly handle the vitruvian
-                pose_mats[i] = tree.pose_mats[i] *
-                               glm::mat4(glm::transpose(tree.pose_canon_r[i]));
+                pose_mats[i] = tree.pose_mats[i];
+                if (tree.pose_canon_r.size()) {
+                    pose_mats[i] *=
+                        glm::mat4(glm::transpose(tree.pose_canon_r[i]));
+                }
                 if (ImGui::TreeNode(joint_name.c_str())) {
                     std::string slider_id = "axisangle##rig_sli_" + id;
                     if (ImGui::SliderFloat3(slider_id.c_str(),
